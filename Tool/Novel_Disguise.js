@@ -136,7 +136,11 @@
             bodyContentWidth: 700,
 
             // 微信读书 canvas 缩放比例 (1 = 原始大小, 0.7 = 缩到 70%, 数字越小字越小)
-            wereadCanvasScale: 0.8
+            wereadCanvasScale: 0.8,
+
+            // 正文文字透明度 (1 = 完全不透明, 0.1 = 几乎透明). 微信读书 canvas 本身不受影响,
+            // 仅作用于 canvas 下方追加的文字行 (以及起点/番茄的正文段落).
+            bodyTextOpacity: 1
         };
         const stored = GM_getValue(KEY_CONFIG, {});
         const config = Object.assign({}, defaultConfig, stored);
@@ -189,6 +193,11 @@
                     <input type="range" name="settings-body-width" min="300" max="1200" step="10" style="width:160px;vertical-align:middle;">
                     <span class="settings-body-width-display" style="margin-left:8px;font-size:12px;color:#666;">700px</span>
                 </div>
+                <div class="nd-settings-form-group">
+                    <label>正文透明度: </label>
+                    <input type="range" name="settings-body-opacity" min="10" max="100" step="5" style="width:160px;vertical-align:middle;">
+                    <span class="settings-body-opacity-display" style="margin-left:8px;font-size:12px;color:#666;">100%</span>
+                </div>
                 <div class="nd-settings-form-group" style="margin-top: 20px;">
                     <div class="nd-settings-btn-wrapper">
                         <button type="submit">保存设置</button>
@@ -202,12 +211,19 @@
         $settings.find(`input[name=settings-res-resolution][value='${config.resourceResolution}']`).prop('checked', true);
         $settings.find('input[name=settings-body-width]').val(config.bodyContentWidth);
         $settings.find('.settings-body-width-display').text(config.bodyContentWidth + 'px');
+        $settings.find('input[name=settings-body-opacity]').val(Math.round(config.bodyTextOpacity * 100));
+        $settings.find('.settings-body-opacity-display').text(Math.round(config.bodyTextOpacity * 100) + '%');
 
         // 滑块拖动时实时预览 (改 CSS 变量, 不写存储)
         $settings.find('input[name=settings-body-width]').on('input', function () {
             const v = parseInt(this.value);
             $settings.find('.settings-body-width-display').text(v + 'px');
             document.documentElement.style.setProperty('--body-content-width', v + 'px');
+        });
+        $settings.find('input[name=settings-body-opacity]').on('input', function () {
+            const v = parseInt(this.value);
+            $settings.find('.settings-body-opacity-display').text(v + '%');
+            document.documentElement.style.setProperty('--body-text-opacity', (v / 100).toString());
         });
 
         const $modal = showModal($settings, {title: "设置"});
@@ -219,6 +235,8 @@
             config.hideImage = formDataObj.get('settings-hide-image') === 'true';
             config.resourceResolution = formDataObj.get('settings-res-resolution');
             config.bodyContentWidth = parseInt(formDataObj.get('settings-body-width')) || 700;
+            const opacityPct = parseInt(formDataObj.get('settings-body-opacity'));
+            config.bodyTextOpacity = isNaN(opacityPct) ? 1 : Math.max(0.1, Math.min(1, opacityPct / 100));
             writeConfig();
 
             popMsg("设置已保存");
@@ -618,6 +636,12 @@
             white-space: normal;
         }
 
+        /* 正文文字透明度 (用户可在设置里调整). 微信读书 canvas 单元格本身排除,
+           保持 canvas 视觉清晰; 仅作用于 canvas 下方追加的文字行 + 起点/番茄正文段落. */
+        .excel-table tbody > tr > td.disguised-content-cell:not(.weread-canvas-cell) {
+            opacity: var(--body-text-opacity, 1);
+        }
+
         .excel-table > tbody > tr > td:nth-child(1) {
             text-align: center;
             background-color: #E6E6E6;
@@ -667,6 +691,7 @@
 
         // 应用 B 列宽度 CSS 变量 (用户可在设置中通过滑块调整)
         document.documentElement.style.setProperty('--body-content-width', config.bodyContentWidth + 'px');
+        document.documentElement.style.setProperty('--body-text-opacity', (config.bodyTextOpacity || 1).toString());
 
         padExcelBlankLines();
         insertTitleRow();

@@ -1789,39 +1789,75 @@
             }
             buildNavRow($tbody, getExcelLastIndex() + 1);
 
-            // 章节切换检测: 多路触发, 任意一路命中就 reload, phase 1 重新抓取.
+            // 章节切换检测: 多路触发, 任意一路命中就跳转, phase 1 重新抓取.
             // 1) 键盘左右方向键 = weread 内置上一章/下一章快捷键
             // 2) URL 变化 (popstate / hashchange / pushState polling)
             // 3) DOM 出现新的 wr_canvasContainer (兜底, 比如点 nav 按钮触发的)
+            //
+            // ⚠ 关键 bug 修复 — 不能直接 location.reload(). weread 切章流程是:
+            //   t=0    pushState 把 URL 切到下一章 (地址栏立刻更新)
+            //   t=??   AJAX 加载新章节
+            //   t=??   若 AJAX 被 reload 中断, weread 会 replaceState 把 URL 改回当前章
+            // 200ms 后 location.reload() 触发时, location.href 可能已经被改回旧章,
+            // 结果 reload 加载的是旧章, 永远卡在当前章节出不去.
+            // 修复: 第一时间捕获新 URL, 用 location.assign(captured) 强制跳到捕获到的 URL,
+            // 即便 weread 之后改回去也不影响 — 我们手里的 URL 才是权威.
+            const initialHref = location.href;
             let reloadScheduled = false;
-            function scheduleReload(reason) {
+            function scheduleReload(reason, targetUrl) {
                 if (reloadScheduled) return;
                 reloadScheduled = true;
-                printLog(`检测到章节切换 (${reason}), 刷新页面重新抓取文字`);
-                setTimeout(function () { location.reload(); }, 200);
+                const target = targetUrl || location.href;
+                printLog(`检测到章节切换 (${reason}), 准备跳转到 ${target}`);
+                setTimeout(function () {
+                    if (target !== location.href) {
+                        // weread 已把 URL 改回去, 用捕获到的新 URL 强制跳转
+                        printLog(`URL 已被 weread 改回 ${location.href}, 用捕获的 ${target} 强制跳转`);
+                        location.assign(target);
+                    } else {
+                        location.reload();
+                    }
+                }, 200);
             }
 
             const onArrowKey = function (event) {
-                if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-                    const tag = (event.target && event.target.tagName) || '';
-                    if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target && event.target.isContentEditable)) return;
-                    scheduleReload('方向键 ' + event.key);
-                }
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                const tag = (event.target && event.target.tagName) || '';
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target && event.target.isContentEditable)) return;
+                if (reloadScheduled) return;
+
+                // 不能立刻调 scheduleReload — 此刻 weread 还没 pushState, location.href 仍是旧 URL.
+                // 50ms 短轮询观察 URL 变化, 抓到新 URL 再排 reload, 1 秒超时 (weread 没响应就放弃).
+                const startUrl = location.href;
+                let attempts = 0;
+                const captureTimer = setInterval(function () {
+                    attempts++;
+                    if (reloadScheduled) { clearInterval(captureTimer); return; }
+                    if (location.href !== startUrl) {
+                        clearInterval(captureTimer);
+                        const newUrl = location.href;
+                        printLog(`方向键 ${event.key}: URL ${startUrl} → ${newUrl}`);
+                        scheduleReload('方向键 ' + event.key, newUrl);
+                    } else if (attempts >= 20) {
+                        clearInterval(captureTimer);
+                        printLog('warn', `方向键 ${event.key} 按下 1s 后 URL 未变化, 不 reload`);
+                    }
+                }, 50);
             };
             document.addEventListener('keydown', onArrowKey, true);
 
-            const initialHref = location.href;
             window.addEventListener('popstate', function () {
-                if (location.href !== initialHref) scheduleReload('popstate');
+                if (location.href !== initialHref) scheduleReload('popstate', location.href);
             });
             window.addEventListener('hashchange', function () {
-                if (location.href !== initialHref) scheduleReload('hashchange');
+                if (location.href !== initialHref) scheduleReload('hashchange', location.href);
             });
-            // pushState/replaceState 不触发任何事件, 只能轮询比较 href
+            // pushState/replaceState 不触发任何事件, 只能轮询比较 href.
+            // 100ms 而非 500ms — 越早捕获新 URL 越保险, 防止 weread 后续 replaceState 改回去.
             const hrefPoll = setInterval(function () {
                 if (reloadScheduled) { clearInterval(hrefPoll); return; }
-                if (location.href !== initialHref) scheduleReload('href poll');
-            }, 500);
+                if (location.href !== initialHref) scheduleReload('href poll', location.href);
+            }, 100);
 
             const reRenderObserver = new MutationObserver(function () {
                 const $newContainer = $('.app_content .wr_canvasContainer').not($canvasCell.find('.wr_canvasContainer'));
@@ -1830,7 +1866,7 @@
                     const heightMatch = styleAttr.match(/height:\s*([\d.]+)px/i);
                     const newHeight = heightMatch ? parseInt(heightMatch[1]) : 0;
                     if (newHeight > 100) {
-                        scheduleReload('新 canvasContainer');
+                        scheduleReload('新 canvasContainer', location.href);
                     }
                 }
             });

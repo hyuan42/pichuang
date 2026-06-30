@@ -2,7 +2,7 @@
 // @name         小说页面伪装
 // @namespace    https://github.com/NiaoBlush/novel-disguise
 // @version      2.12.0-mini
-// @description  适配起点/番茄/微信读书, 仅保留Excel伪装模式. 基于NiaoBlush的novel-disguise脚本(MIT)精简改造.
+// @description  适配起点/番茄/微信读书, 仅保留Excel伪装模式. 基于NiaoBlush的novel-disguise脚本(MIT)精简改造.支持excel模式、代码模式。
 // @author       NiaoBlush (modified)
 // @license      MIT
 // @run-at       document-end
@@ -57,6 +57,10 @@
             FORCE_1K: '1k',
             FORCE_2K: '2k',
             FORCE_4K: '4k'
+        },
+        DISGUISE_MODE: {
+            EXCEL: 'disguise_excel',
+            CODE: 'disguise_code'
         }
     };
 
@@ -140,7 +144,13 @@
 
             // 正文文字透明度 (1 = 完全不透明, 0.1 = 几乎透明). 微信读书 canvas 本身不受影响,
             // 仅作用于 canvas 下方追加的文字行 (以及起点/番茄的正文段落).
-            bodyTextOpacity: 1
+            bodyTextOpacity: 1,
+
+            // 代码模式 canvas 不透明度 (0.1~1). 配合 invert 滤镜让文字呈白色, 值越小越透明
+            ideCanvasOpacity: 1,
+
+            // 伪装模式: 'disguise_excel' = Excel表格, 'disguise_code' = IDE代码
+            disguiseMode: DICT.DISGUISE_MODE.EXCEL
         };
         const stored = GM_getValue(KEY_CONFIG, {});
         const config = Object.assign({}, defaultConfig, stored);
@@ -177,6 +187,11 @@
                     </select>
                 </div>
                 <div class="nd-settings-form-group">
+                    <label>伪装模式: </label>
+                    <label style="width: 30%;"><input type="radio" name="settings-disguise-mode" value="${DICT.DISGUISE_MODE.EXCEL}">Excel</label>
+                    <label style="width: 30%;"><input type="radio" name="settings-disguise-mode" value="${DICT.DISGUISE_MODE.CODE}">代码</label>
+                </div>
+                <div class="nd-settings-form-group">
                     <label>隐藏图片: </label>
                     <label style="width: 30%;"><input type="radio" name="settings-hide-image" value="true">是</label>
                     <label style="width: 30%;"><input type="radio" name="settings-hide-image" value="false">否</label>
@@ -198,6 +213,16 @@
                     <input type="range" name="settings-body-opacity" min="10" max="100" step="5" style="width:160px;vertical-align:middle;">
                     <span class="settings-body-opacity-display" style="margin-left:8px;font-size:12px;color:#666;">100%</span>
                 </div>
+                <div class="nd-settings-form-group">
+                    <label>Canvas 缩放: </label>
+                    <input type="range" name="settings-canvas-scale" min="40" max="150" step="5" style="width:160px;vertical-align:middle;">
+                    <span class="settings-canvas-scale-display" style="margin-left:8px;font-size:12px;color:#666;">80%</span>
+                </div>
+                <div class="nd-settings-form-group">
+                    <label>Canvas 不透明度: </label>
+                    <input type="range" name="settings-canvas-opacity" min="10" max="100" step="5" style="width:160px;vertical-align:middle;">
+                    <span class="settings-canvas-opacity-display" style="margin-left:8px;font-size:12px;color:#666;">100%</span>
+                </div>
                 <div class="nd-settings-form-group" style="margin-top: 20px;">
                     <div class="nd-settings-btn-wrapper">
                         <button type="submit">保存设置</button>
@@ -207,12 +232,19 @@
         `);
 
         $settings.find("select[name=settings-theme]").val(config.theme);
+        $settings.find(`input[name=settings-disguise-mode][value='${config.disguiseMode || DICT.DISGUISE_MODE.EXCEL}']`).prop('checked', true);
         $settings.find(`input[name=settings-hide-image][value='${String(config.hideImage)}']`).prop('checked', true);
         $settings.find(`input[name=settings-res-resolution][value='${config.resourceResolution}']`).prop('checked', true);
         $settings.find('input[name=settings-body-width]').val(config.bodyContentWidth);
         $settings.find('.settings-body-width-display').text(config.bodyContentWidth + 'px');
         $settings.find('input[name=settings-body-opacity]').val(Math.round(config.bodyTextOpacity * 100));
         $settings.find('.settings-body-opacity-display').text(Math.round(config.bodyTextOpacity * 100) + '%');
+        const canvasScalePct = Math.round((config.wereadCanvasScale || 0.8) * 100);
+        $settings.find('input[name=settings-canvas-scale]').val(canvasScalePct);
+        $settings.find('.settings-canvas-scale-display').text(canvasScalePct + '%');
+        const canvasOpacityPct = Math.round((config.ideCanvasOpacity || 1) * 100);
+        $settings.find('input[name=settings-canvas-opacity]').val(canvasOpacityPct);
+        $settings.find('.settings-canvas-opacity-display').text(canvasOpacityPct + '%');
 
         // 滑块拖动时实时预览 (改 CSS 变量, 不写存储)
         $settings.find('input[name=settings-body-width]').on('input', function () {
@@ -225,6 +257,11 @@
             $settings.find('.settings-body-opacity-display').text(v + '%');
             document.documentElement.style.setProperty('--body-text-opacity', (v / 100).toString());
         });
+        $settings.find('input[name=settings-canvas-opacity]').on('input', function () {
+            const v = parseInt(this.value);
+            $settings.find('.settings-canvas-opacity-display').text(v + '%');
+            _applyIdeCanvasFilter(v / 100);
+        });
 
         const $modal = showModal($settings, {title: "设置"});
 
@@ -232,14 +269,19 @@
             event.preventDefault();
             const formDataObj = new FormData(this);
             config.theme = formDataObj.get('settings-theme');
+            config.disguiseMode = formDataObj.get('settings-disguise-mode') || DICT.DISGUISE_MODE.EXCEL;
             config.hideImage = formDataObj.get('settings-hide-image') === 'true';
             config.resourceResolution = formDataObj.get('settings-res-resolution');
             config.bodyContentWidth = parseInt(formDataObj.get('settings-body-width')) || 700;
             const opacityPct = parseInt(formDataObj.get('settings-body-opacity'));
             config.bodyTextOpacity = isNaN(opacityPct) ? 1 : Math.max(0.1, Math.min(1, opacityPct / 100));
+            const canvasScaleVal = parseInt(formDataObj.get('settings-canvas-scale'));
+            config.wereadCanvasScale = isNaN(canvasScaleVal) ? 0.8 : Math.max(0.4, Math.min(1.5, canvasScaleVal / 100));
+            const canvasOpacityVal = parseInt(formDataObj.get('settings-canvas-opacity'));
+            config.ideCanvasOpacity = isNaN(canvasOpacityVal) ? 1 : Math.max(0.1, Math.min(1, canvasOpacityVal / 100));
             writeConfig();
 
-            popMsg("设置已保存");
+            popMsg("设置已保存，刷新后生效");
             $modal.remove();
         });
     }
@@ -1377,7 +1419,8 @@
             content.appendTo($modal.find(".disguised-modal-body"));
         }
 
-        $("#disguised-page").append($modal);
+        const $host = $('#disguised-page').length ? $('#disguised-page') : ($('#ide-page').length ? $('#ide-page') : $('body'));
+        $host.append($modal);
         return $modal;
     }
 
@@ -1390,12 +1433,873 @@
         setTimeout(() => { $msg.remove(); }, type == 'ok' ? 2500 : 5500);
     }
 
+    ///////////////////////////// IDE 代码伪装模式 (双栏 Claude Code 风格)
+
+    // ---- Snippet pool (ported from fish-reader-vscode) ----
+    const _SNIP_POOL = {
+        typescript: [
+            { cat: 'refactor', lines: [
+                { t: 'del', c: 'const timeout = 5000;' },
+                { t: 'add', c: 'const DEFAULT_TIMEOUT_MS = 5000;' },
+                { t: 'del', c: 'setTimeout(fn, 5000);' },
+                { t: 'add', c: 'setTimeout(fn, DEFAULT_TIMEOUT_MS);' }
+            ]},
+            { cat: 'refactor', lines: [
+                { t: 'add', c: 'const cache = new Map<string, number>();' },
+                { t: 'ctx', c: 'function compute(x: string) {' },
+                { t: 'add', c: '  if (cache.has(x)) return cache.get(x)!;' },
+                { t: 'ctx', c: '  const result = expensive(x);' },
+                { t: 'add', c: '  cache.set(x, result);' },
+                { t: 'ctx', c: '  return result;' },
+                { t: 'ctx', c: '}' }
+            ]},
+            { cat: 'feature', lines: [
+                { t: 'add', c: 'async function withRetry<T>(fn: () => Promise<T>, max = 3): Promise<T> {' },
+                { t: 'add', c: '  for (let i = 0; i < max; i++) {' },
+                { t: 'add', c: '    try { return await fn(); }' },
+                { t: 'add', c: '    catch (e) { if (i === max - 1) throw e; }' },
+                { t: 'add', c: '  }' },
+                { t: 'add', c: '  throw new Error("unreachable");' },
+                { t: 'add', c: '}' }
+            ]},
+            { cat: 'fix', lines: [
+                { t: 'del', c: 'return user.profile.name;' },
+                { t: 'add', c: "return user?.profile?.name ?? 'Anonymous';" }
+            ]},
+            { cat: 'fix', lines: [
+                { t: 'ctx', c: 'export function parse(input: string) {' },
+                { t: 'add', c: '  if (!input) return [];' },
+                { t: 'ctx', c: '  return input.split(",").map((s) => s.trim());' },
+                { t: 'ctx', c: '}' }
+            ]},
+            { cat: 'chore', lines: [
+                { t: 'del', c: '// TODO: refactor later' },
+                { t: 'add', c: '// Memoized lookup keyed by normalized path.' },
+                { t: 'ctx', c: 'const index = buildIndex(entries);' }
+            ]},
+            { cat: 'refactor', lines: [
+                { t: 'ctx', c: 'export class UserService {' },
+                { t: 'del', c: '  constructor(private db: Database, private cache: Cache) {}' },
+                { t: 'add', c: '  constructor(private readonly db: Database, private readonly cache: Cache) {}' },
+                { t: 'ctx', c: '}' }
+            ]}
+        ],
+        python: [
+            { cat: 'refactor', lines: [
+                { t: 'del', c: 'result = []' },
+                { t: 'del', c: 'for item in items:' },
+                { t: 'del', c: '    result.append(item * 2)' },
+                { t: 'add', c: 'result = [item * 2 for item in items]' }
+            ]},
+            { cat: 'feature', lines: [
+                { t: 'add', c: '@lru_cache(maxsize=128)' },
+                { t: 'ctx', c: 'def compute(n: int) -> int:' },
+                { t: 'ctx', c: '    return sum(range(n))' }
+            ]},
+            { cat: 'fix', lines: [
+                { t: 'del', c: 'value = config["timeout"]' },
+                { t: 'add', c: 'value = config.get("timeout", 30)' }
+            ]},
+            { cat: 'refactor', lines: [
+                { t: 'ctx', c: 'def load_data(path):' },
+                { t: 'del', c: '    f = open(path)' },
+                { t: 'del', c: '    data = json.load(f)' },
+                { t: 'del', c: '    f.close()' },
+                { t: 'add', c: '    with open(path) as f:' },
+                { t: 'add', c: '        data = json.load(f)' },
+                { t: 'ctx', c: '    return data' }
+            ]}
+        ],
+        go: [
+            { cat: 'fix', lines: [
+                { t: 'ctx', c: 'func fetch(ctx context.Context) error {' },
+                { t: 'add', c: '\tif err != nil {' },
+                { t: 'add', c: '\t\treturn fmt.Errorf("fetch: %w", err)' },
+                { t: 'add', c: '\t}' },
+                { t: 'ctx', c: '\treturn nil' },
+                { t: 'ctx', c: '}' }
+            ]},
+            { cat: 'refactor', lines: [
+                { t: 'del', c: 'var buf bytes.Buffer' },
+                { t: 'del', c: 'buf.WriteString(s)' },
+                { t: 'add', c: 'var sb strings.Builder' },
+                { t: 'add', c: 'sb.WriteString(s)' }
+            ]}
+        ],
+        javascript: [
+            { cat: 'refactor', lines: [
+                { t: 'del', c: 'var data = getData();' },
+                { t: 'add', c: 'const data = getData();' },
+                { t: 'del', c: 'for (var i = 0; i < data.length; i++) {' },
+                { t: 'add', c: 'for (let i = 0; i < data.length; i++) {' }
+            ]},
+            { cat: 'feature', lines: [
+                { t: 'add', c: 'function debounce(fn, wait) {' },
+                { t: 'add', c: '  let t;' },
+                { t: 'add', c: '  return (...args) => {' },
+                { t: 'add', c: '    clearTimeout(t);' },
+                { t: 'add', c: '    t = setTimeout(() => fn(...args), wait);' },
+                { t: 'add', c: '  };' },
+                { t: 'add', c: '}' }
+            ]},
+            { cat: 'fix', lines: [
+                { t: 'del', c: 'if (value == null) {' },
+                { t: 'add', c: 'if (value === null || value === undefined) {' },
+                { t: 'ctx', c: '  return fallback;' },
+                { t: 'ctx', c: '}' }
+            ]}
+        ]
+    };
+
+    const _FILE_NAMES = {
+        typescript: ['utils.ts', 'api.ts', 'parser.ts', 'config.ts', 'service.ts', 'handler.ts', 'middleware.ts', 'index.ts'],
+        python: ['utils.py', 'parser.py', 'service.py', 'models.py', 'handlers.py', '__init__.py'],
+        go: ['main.go', 'handler.go', 'server.go', 'util.go', 'client.go'],
+        javascript: ['utils.js', 'api.js', 'index.js', 'config.js', 'router.js']
+    };
+
+    const _ANALYSIS = {
+        refactor: [
+            'Pulled the repeated literal in {f} into a named constant.',
+            'Simplified this branch in {f} — the loop collapses to one expression.',
+            'Hoisted the lookup in {f} so it only runs once per call.',
+            'Renamed for clarity and extracted the inline value in {f}.',
+        ],
+        feature: [
+            'Added a small helper in {f} to cover the retry path.',
+            'Wired up the missing edge-case handler in {f}.',
+            'Introduced a memoization layer in {f} for the hot path.',
+        ],
+        fix: [
+            'Guarded against the null case in {f} — this would throw on empty input.',
+            'Fixed the off-by-one in {f}; the boundary check was inclusive.',
+            'Corrected the default in {f} so missing keys no longer crash.',
+        ],
+        chore: [
+            'Tidied the comments and imports in {f}.',
+            'Normalized formatting in {f}, no behavior change.',
+        ]
+    };
+
+    function _pickLang() {
+        const langs = ['typescript', 'typescript', 'typescript', 'python', 'python', 'go', 'javascript'];
+        return langs[Math.floor(Math.random() * langs.length)];
+    }
+
+    function _generateFakeDiff() {
+        const lang = _pickLang();
+        const pool = _SNIP_POOL[lang] || _SNIP_POOL.typescript;
+        const snippet = pool[Math.floor(Math.random() * pool.length)];
+        const filePool = _FILE_NAMES[lang] || _FILE_NAMES.typescript;
+        const fileName = filePool[Math.floor(Math.random() * filePool.length)];
+        const adds = snippet.lines.filter(function (l) { return l.t !== 'del'; }).length;
+        const dels = snippet.lines.filter(function (l) { return l.t !== 'add'; }).length;
+        const start = Math.floor(Math.random() * 232) + 8;
+        return {
+            fileName: fileName,
+            lang: lang,
+            header: '@@ -' + start + ',' + dels + ' +' + start + ',' + adds + ' @@',
+            category: snippet.cat,
+            lines: snippet.lines
+        };
+    }
+
+    function _analysisFor(hunk) {
+        const pool = _ANALYSIS[hunk.category] || _ANALYSIS.refactor;
+        return pool[Math.floor(Math.random() * pool.length)].replace(/\{f\}/g, hunk.fileName);
+    }
+
+    function _diffPlan(frequency) {
+        if (Math.random() > frequency) return 0;
+        const r = Math.random();
+        if (r < 0.12) return Math.floor(Math.random() * 2) + 2;
+        return 1;
+    }
+
+    // ---- 左侧假代码编辑器 ----
+    function _fakeLeftEditorCode() {
+        var r = Math.random;
+        function pick(arr) { return arr[Math.floor(r() * arr.length)]; }
+        var tok = [];
+        function line() { tok.push({ t: 'pl', c: '' }); }
+        function kw(s) { tok.push({ t: 'kw', c: s }); }
+        function ty(s) { tok.push({ t: 'ty', c: s }); }
+        function fn(s) { tok.push({ t: 'fn', c: s }); }
+        function str(s) { tok.push({ t: 'str', c: s }); }
+        function nm(s) { tok.push({ t: 'nm', c: String(s) }); }
+        function cm(s) { tok.push({ t: 'cm', c: s }); }
+        function pl(s) { tok.push({ t: 'pl', c: s }); }
+
+        var interfaces = ['ToolCallOpts', 'AgentConfig', 'StreamChunk', 'MessageBlock', 'RunOptions', 'ContextWindow', 'ToolResult', 'PlanStep'];
+        var funcNames  = ['runAgentTool', 'buildContext', 'parseOutput', 'streamResponse', 'withRetry', 'resolveTools', 'handleInterrupt', 'flushBuffer', 'countTokens', 'normalizeInput'];
+        var varNames   = ['result', 'attempt', 'items', 'chunks', 'output', 'ctx', 'buf', 'opts', 'plan', 'delta'];
+        var typeNames  = ['string', 'number', 'boolean', 'void', 'Promise', 'AbortSignal', 'Error', 'ReadonlyArray'];
+        var imports    = [
+            ["{ useState, useEffect, useCallback }", "'react'"],
+            ["type { FC, ReactNode }", "'react'"],
+            ["{ Anthropic }", "'@anthropic-ai/sdk'"],
+            ["{ readFile, writeFile }", "'fs/promises'"],
+            ["{ join, resolve }", "'path'"],
+            ["* as vscode", "'vscode'"],
+            ["{ EventEmitter }", "'events'"],
+            ["{ createHash }", "'crypto'"],
+        ];
+
+        // --- imports section (2-4 lines) ---
+        var numImports = 2 + Math.floor(r() * 3);
+        var usedImports = [];
+        for (var i = 0; i < numImports; i++) {
+            var imp = pick(imports);
+            if (usedImports.indexOf(imp) < 0) usedImports.push(imp);
+        }
+        usedImports.forEach(function(imp) {
+            kw('import'); pl(' ' + imp[0]); kw(' from'); str(' ' + imp[1] + ';'); line();
+        });
+        line();
+
+        // --- random interface (6-10 lines) ---
+        var iface = pick(interfaces);
+        cm('// ' + pick(['Unified handler for', 'Configuration for', 'Options passed to', 'Result type for']) + ' the ' + pick(['agent', 'tool', 'streaming', 'context']) + ' pipeline'); line();
+        kw('interface'); ty(' ' + iface); pl(' {'); line();
+        var ifaceFields = [
+            ['signal', 'AbortSignal'], ['maxRetries', 'number'], ['timeout', 'number'],
+            ['onProgress', '(delta: string) => void'], ['model', 'string'], ['cache', 'boolean'],
+            ['stream', 'boolean'], ['maxTokens', 'number'],
+        ];
+        var numFields = 3 + Math.floor(r() * 3);
+        var usedFields = [];
+        for (var fi = 0; fi < numFields; fi++) {
+            var field = pick(ifaceFields);
+            if (usedFields.indexOf(field) < 0) usedFields.push(field);
+        }
+        usedFields.forEach(function(f) {
+            var optional = r() > 0.6 ? '?' : '';
+            pl('  ' + f[0] + optional + ': '); ty(f[1]); pl(';'); line();
+        });
+        pl('}'); line();
+        line();
+
+        // --- random const arrow function (4-8 lines) ---
+        var cfName = pick(funcNames);
+        var param1 = pick(varNames);
+        var param2 = pick(varNames.filter(function(v) { return v !== param1; }));
+        var retType = pick(['string', 'number', 'boolean', 'void']);
+        cm('// ' + pick(['Memoized', 'Cached', 'Normalized', 'Validated']) + ' ' + pick(['lookup', 'transform', 'resolver', 'mapper']) + ' keyed by ' + pick(['path', 'id', 'hash', 'name'])); line();
+        kw('export'); kw(' const'); pl(' '); fn(cfName); pl(' = ');
+        kw('async'); pl(' (' + param1 + ': '); ty('string'); pl(', ' + param2 + ': '); ty(pick(typeNames)); pl('): '); ty('Promise'); pl('<'); ty(retType); pl('> => {'); line();
+        kw('  const'); pl(' ' + pick(varNames) + ' = '); kw('await '); fn(pick(funcNames)); pl('(' + param1 + ');'); line();
+        if (r() > 0.4) {
+            kw('  if'); pl(' (!' + pick(varNames) + ') '); kw('return'); pl(retType === 'string' ? " '';" : retType === 'number' ? ' 0;' : ' false;'); line();
+        }
+        kw('  return'); pl(' ' + pick(varNames) + ';'); line();
+        pl('};'); line();
+        line();
+
+        // --- async function with try/catch (10-14 lines) ---
+        var asyncFn = pick(funcNames.filter(function(f) { return f !== cfName; }));
+        var aParam = pick(varNames);
+        kw('export'); kw(' async function'); fn(' ' + asyncFn);
+        pl('(' + aParam + ': '); ty(iface); pl('): '); ty('Promise'); pl('<'); ty('void'); pl('> {'); line();
+        kw('  let'); pl(' attempt = '); nm(0); pl(';'); line();
+        kw('  while'); pl(' (attempt < ' + aParam + '.maxRetries) {'); line();
+        kw('    try'); pl(' {'); line();
+        kw('      await'); pl(' '); fn(pick(funcNames)); pl('(' + aParam + ');'); line();
+        kw('      return'); pl(';'); line();
+        pl('    } '); kw('catch'); pl(' (e) {'); line();
+        pl('      attempt++;'); line();
+        kw('      if'); pl(' (attempt >= ' + aParam + '.maxRetries) '); kw('throw'); pl(' e;'); line();
+        pl('    }'); line();
+        pl('  }'); line();
+        pl('}'); line();
+        line();
+
+        // --- const declarations block (4-6 lines) ---
+        var numConsts = 3 + Math.floor(r() * 3);
+        for (var ci = 0; ci < numConsts; ci++) {
+            kw('const'); pl(' ');
+            var cname = pick(['DEFAULT_TIMEOUT', 'MAX_RETRIES', 'CACHE_SIZE', 'BATCH_SIZE', 'MAX_TOKENS', 'MIN_INTERVAL']);
+            pl(cname + ' = '); nm(pick([3, 5, 8, 16, 32, 64, 128, 1000, 5000])); pl(';'); line();
+        }
+        line();
+
+        // --- map/utility block (5-8 lines) ---
+        var mapName = pick(['cache', 'index', 'registry', 'store', 'lookup']);
+        kw('const'); pl(' ' + mapName + ' = '); kw('new'); pl(' '); ty('Map'); pl('<'); ty('string'); pl(', '); ty('number'); pl('>();'); line();
+        fn(pick(funcNames)); pl('.' + pick(['forEach', 'map', 'filter']) + '((');
+        pl(pick(varNames) + ') => {'); line();
+        kw('  if'); pl(' (' + mapName + '.has(' + pick(varNames) + ')) '); kw('return'); pl(';'); line();
+        pl('  ' + mapName + '.set(' + pick(varNames) + ', '); nm(pick([0, 1, -1])); pl(');'); line();
+        pl('});'); line();
+        line();
+
+        // --- second interface or type alias (4-6 lines) ---
+        var iface2 = pick(interfaces.filter(function(i) { return i !== iface; }));
+        kw('type'); ty(' ' + iface2); pl(' = {'); line();
+        pl('  ' + pick(['id', 'name', 'status', 'type']) + ': '); ty('string'); pl(';'); line();
+        pl('  ' + pick(['count', 'index', 'size', 'offset']) + ': '); ty('number'); pl(';'); line();
+        if (r() > 0.5) {
+            pl('  ' + pick(['enabled', 'cached', 'streaming', 'async']) + ': '); ty('boolean'); pl(';'); line();
+        }
+        pl('};'); line();
+        line();
+
+        // --- fill remainder up to ~100 display-lines with short utility blocks ---
+        var displayLines = tok.filter(function(tk) { return tk.c === ''; }).length;
+        while (displayLines < 95) {
+            var variant = Math.floor(r() * 4);
+            if (variant === 0) {
+                // simple function
+                var sfn = pick(funcNames);
+                kw('function'); fn(' ' + sfn); pl('('); pl(pick(varNames) + ': '); ty(pick(['string', 'number'])); pl('): '); ty(pick(['string', 'boolean', 'void'])); pl(' {'); line();
+                kw('  return'); pl(' ' + pick(varNames) + ' ?? '); str("'default'"); pl(';'); line();
+                pl('}'); line();
+                line();
+                displayLines += 4;
+            } else if (variant === 1) {
+                // comment + const
+                cm('// ' + pick(['Initialize', 'Reset', 'Flush', 'Normalize']) + ' the ' + pick(['buffer', 'queue', 'cache', 'registry']) + ' on startup'); line();
+                kw('const'); pl(' ' + pick(varNames) + ': '); ty(pick(typeNames)); pl('[] = [];'); line();
+                line();
+                displayLines += 3;
+            } else if (variant === 2) {
+                // logger-style block
+                kw('if'); pl(' (process.env.NODE_ENV !== '); str("'production'"); pl(') {'); line();
+                pl('  console.' + pick(['log', 'warn', 'debug']) + '('); str("'[agent]'"); pl(', ' + pick(varNames) + ');'); line();
+                pl('}'); line();
+                line();
+                displayLines += 4;
+            } else {
+                // short arrow
+                kw('const'); pl(' '); fn(pick(funcNames)); pl(' = ('); pl(pick(varNames) + ': '); ty(pick(typeNames)); pl(') => ');
+                pl(pick(varNames) + '.' + pick(['trim', 'toLowerCase', 'toString']) + '();'); line();
+                line();
+                displayLines += 2;
+            }
+        }
+
+        return tok;
+    }
+
+    // 左侧文件树数据
+    function _fakeFileTree() {
+        return [
+            { name: 'cursor',        isDir: true,  open: true,  indent: 0 },
+            { name: '.claude',       isDir: true,  open: false, indent: 1 },
+            { name: '.gemini',       isDir: true,  open: false, indent: 1 },
+            { name: 'src',           isDir: true,  open: true,  indent: 1 },
+            { name: 'agent.ts',      isDir: false, active: true, indent: 2, ext: 'ts' },
+            { name: 'context.ts',    isDir: false, indent: 2, ext: 'ts' },
+            { name: 'tools.ts',      isDir: false, indent: 2, ext: 'ts' },
+            { name: 'utils',         isDir: true,  open: false, indent: 2 },
+            { name: 'package.json',  isDir: false, indent: 1, ext: 'json' },
+            { name: 'tsconfig.json', isDir: false, indent: 1, ext: 'json' },
+        ];
+    }
+
+    // IDE 模式: 正文行收集器 + diff 计数器
+    let _ideNovelLines = [];
+    let _ideBuilt = false;
+    let _ideParagraphCount = 0;
+
+    function _applyIdeCanvasFilter(opacity) {
+        const op = Math.max(0.1, Math.min(1, opacity || (config.ideCanvasOpacity || 1)));
+        $('#ide-weread-canvas-slot canvas').css({ filter: 'invert(1) hue-rotate(20deg) brightness(1.9) contrast(1.2)', opacity: op });
+    }
+
+    function _pushIdeLines(lines) {
+        if (!lines || lines.length === 0) return;
+        const cleaned = lines.map(function (l) {
+            return (typeof l === 'string' ? l : ($(l).text ? $(l).text() : String(l)))
+                .replace(/&nbsp;/g, ' ').replace(/<[^>]+>/g, '').trim();
+        }).filter(Boolean);
+        _ideNovelLines = _ideNovelLines.concat(cleaned);
+
+        if (!_ideBuilt) return;
+        cleaned.forEach(function (text) {
+            _appendChatNovelTurn(text);
+        });
+    }
+
+    // 把一段正文渲染为 ● assistant 气泡, 并在后面按概率追加 diff 块
+    function _appendChatNovelTurn(text) {
+        const $log = $('#cc-log');
+        if (!$log.length) return;
+
+        const $turn = $('<div class="cc-turn"></div>');
+        const $head = $('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span></div>');
+        const $body = $('<div class="cc-turn-body"></div>');
+        const $txt = $('<div class="cc-novel-text"></div>').text(text);
+        $body.append($txt);
+        $turn.append($head);
+        $turn.append($body);
+        $log.append($turn);
+
+        _ideParagraphCount++;
+
+        const n = _diffPlan(0.38);
+        for (let i = 0; i < n; i++) {
+            _appendChatDiffTurn($log);
+        }
+    }
+
+    function _appendChatDiffTurn($log) {
+        const hunk = _generateFakeDiff();
+        const analysis = _analysisFor(hunk);
+
+        const $turn = $('<div class="cc-turn"></div>');
+        const $head = $('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span><span class="cc-label cc-muted"> edited ' + hunk.fileName + '</span></div>');
+        const $body = $('<div class="cc-turn-body"></div>');
+        const $analysis = $('<div class="cc-analysis-text"></div>').text(analysis);
+        $body.append($analysis);
+        $turn.append($head);
+        $turn.append($body);
+
+        // diff block
+        const $diff = $('<div class="cc-diff-block"></div>');
+        const $dHead = $('<div class="cc-diff-head"><span class="cc-diff-file">' + hunk.fileName + '</span><span class="cc-diff-meta cc-muted"> ' + hunk.header + '</span></div>');
+        const $dBody = $('<div class="cc-diff-body"></div>');
+        hunk.lines.forEach(function (line) {
+            const cls = 'cc-diff-line cc-diff-' + line.t;
+            const sign = line.t === 'add' ? '+' : line.t === 'del' ? '-' : ' ';
+            const $row = $('<div class="' + cls + '"><span class="cc-diff-sign">' + sign + '</span><span class="cc-diff-code"></span></div>');
+            $row.find('.cc-diff-code').text(line.c);
+            $dBody.append($row);
+        });
+        $diff.append($dHead);
+        $diff.append($dBody);
+        $body.append($diff);
+        $log.append($turn);
+    }
+
+    function _rebuildIdeEditor() {
+        if (!_ideBuilt) return;
+        const $log = $('#cc-log');
+        if (!$log.length) return;
+        $log.find('.cc-turn:not(.cc-canvas-turn)').remove();
+        _ideParagraphCount = 0;
+        _ideNovelLines.forEach(function (text) {
+            _appendChatNovelTurn(text);
+        });
+        $log.scrollTop(0);
+    }
+
+    function commonIDE() {
+        document.title = '无标题（工作区）';
+
+        const colorVars = [
+            '--cc-bg: #1e1e1e',
+            '--cc-bg2: #252526',
+            '--cc-bg3: #2d2d2d',
+            '--cc-border: #333333',
+            '--cc-border2: #3c3c3c',
+            '--cc-text: #cccccc',
+            '--cc-text2: #858585',
+            '--cc-text3: #6e6e6e',
+            '--cc-accent: #007acc',
+            '--cc-green: #6a9955',
+            '--cc-blue: #569cd6',
+            '--cc-orange: #d4a574',
+            '--cc-string: #ce9178',
+            '--cc-diff-add-bg: rgba(63,185,80,.12)',
+            '--cc-diff-add-fg: #7ee787',
+            '--cc-diff-del-bg: rgba(248,81,73,.12)',
+            '--cc-diff-del-fg: #f85149',
+            '--cc-font-mono: "Cascadia Code","SF Mono","Menlo","Monaco","Consolas",monospace',
+            '--cc-font-sans: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+        ].join(';');
+
+        GM_addStyle(`
+        html { overflow-y: hidden; color-scheme: normal !important; }
+
+        #ide-page {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column;
+            background: var(--cc-bg); color: var(--cc-text);
+            font-family: var(--cc-font-sans); font-size: 13px;
+            ${colorVars};
+        }
+
+        /* Titlebar (macOS traffic lights + title) */
+        #ide-titlebar {
+            height: 28px; background: #323233;
+            display: flex; align-items: center; padding: 0 12px; gap: 8px;
+            border-bottom: 1px solid #111; flex-shrink: 0;
+        }
+        .ide-titlebar-dot { width: 12px; height: 12px; border-radius: 50%; }
+        #ide-window-title { flex: 1; text-align: center; font-size: 12px; color: var(--cc-text); }
+
+        /* Main row — holds sidebar + editor + right-pane, no terminal */
+        #ide-main-row { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+
+        /* Outer body = main-row + terminal stacked vertically */
+        #ide-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+
+        /* Activity bar */
+        #ide-activitybar {
+            width: 46px; background: #333333;
+            display: flex; flex-direction: column; align-items: center;
+            padding-top: 8px; gap: 4px; flex-shrink: 0;
+            border-right: 1px solid #111;
+        }
+        .ide-activity-icon {
+            width: 34px; height: 34px; display: flex; align-items: center;
+            justify-content: center; border-radius: 4px; cursor: pointer;
+            color: #858585; font-size: 18px;
+        }
+        .ide-activity-icon.active { color: #fff; border-left: 2px solid #fff; }
+
+        /* ===================== CONTENT AREA (between titlebar and terminal) ===================== */
+        /* ide-main-row already set to flex:1 above; it holds sidebar + editor + right-pane */
+
+        /* File tree sidebar — narrow fixed column */
+        #ide-sidebar {
+            width: 200px; background: var(--cc-bg2);
+            border-right: 1px solid #111;
+            overflow-y: auto; flex-shrink: 0; font-size: 12.5px;
+        }
+        #ide-sidebar-title {
+            padding: 10px 12px 6px; font-size: 11px; font-weight: bold;
+            color: #bbbbbb; letter-spacing: 1px; text-transform: uppercase;
+        }
+        .ide-tree-item {
+            padding: 2px 0 2px 4px; display: flex; align-items: center;
+            cursor: pointer; white-space: nowrap; overflow: hidden;
+        }
+        .ide-tree-item:hover { background: #2a2d2e; }
+        .ide-tree-item.active { background: #094771; color: #fff; }
+        .ide-tree-icon { margin-right: 5px; font-size: 13px; }
+
+        /* Editor column — takes ~half the remaining width */
+        #ide-editor-col {
+            flex: 1.1; display: flex; flex-direction: column; overflow: hidden;
+            border-right: 1px solid var(--cc-border);
+        }
+        #ide-tabbar {
+            height: 35px; background: var(--cc-bg3);
+            display: flex; align-items: flex-end;
+            border-bottom: 1px solid #111; flex-shrink: 0;
+        }
+        .ide-tab {
+            height: 100%; padding: 0 14px; display: flex; align-items: center;
+            font-size: 12.5px; color: #969696; border-right: 1px solid #111;
+            cursor: pointer; gap: 6px; white-space: nowrap;
+            font-family: var(--cc-font-mono);
+        }
+        .ide-tab.active {
+            background: var(--cc-bg); color: #fff;
+            border-top: 1px solid var(--cc-blue); border-bottom: 1px solid var(--cc-bg);
+        }
+        #ide-editor {
+            flex: 1; overflow-y: scroll; background: var(--cc-bg); padding: 8px 0;
+            font-family: var(--cc-font-mono); font-size: 13px; line-height: 19px;
+            scrollbar-width: none;
+        }
+        #ide-editor::-webkit-scrollbar { display: none; }
+        .le-line { display: flex; min-height: 19px; padding: 0 14px 0 0; }
+        .le-line:hover { background: #2a2d2e; }
+        .le-num { width: 44px; text-align: right; padding-right: 20px; color: #858585; flex-shrink: 0; }
+        .le-kw  { color: var(--cc-blue); }
+        .le-ty  { color: #4ec9b0; }
+        .le-fn  { color: #dcdcaa; }
+        .le-str { color: var(--cc-string); }
+        .le-nm  { color: #b5cea8; }
+        .le-cm  { color: var(--cc-green); }
+        .le-pl  { color: var(--cc-text); }
+
+        /* ===================== TERMINAL — full-width row below content ===================== */
+        #ide-terminal {
+            height: 170px; background: var(--cc-bg);
+            border-top: 1px solid var(--cc-border2); flex-shrink: 0;
+        }
+        #ide-terminal-tabs {
+            height: 28px; background: var(--cc-bg3); border-bottom: 1px solid #111;
+            display: flex; align-items: flex-end; padding: 0 10px;
+        }
+        .ide-term-tab {
+            height: 100%; padding: 0 12px; display: flex; align-items: center;
+            font-size: 12px; color: #969696; cursor: pointer; font-family: var(--cc-font-mono);
+        }
+        .ide-term-tab.active { color: var(--cc-text); border-bottom: 1px solid var(--cc-text); }
+        #ide-terminal-body {
+            height: calc(100% - 28px); overflow-y: auto; padding: 6px 12px;
+            font-size: 12px; color: var(--cc-text); font-family: var(--cc-font-mono);
+        }
+        .t-prompt { color: #4ec9b0; line-height: 18px; }
+        .t-log    { color: #888; line-height: 18px; }
+        .t-info   { color: #4fc1ff; line-height: 18px; }
+
+        /* ===================== RIGHT PANE (Claude Code chat) ===================== */
+        #ide-right-pane {
+            flex: 1; display: flex; flex-direction: column; overflow: hidden;
+            background: var(--cc-bg);
+        }
+
+        /* Claude Code titlebar */
+        #cc-titlebar {
+            height: 36px; border-bottom: 1px solid var(--cc-border);
+            display: flex; align-items: center; padding: 0 12px; gap: 6px;
+            flex-shrink: 0; font-family: var(--cc-font-mono); font-size: 12px;
+        }
+        #cc-brand-icon { color: var(--cc-orange); font-size: 14px; }
+        #cc-brand-name { font-weight: 600; color: var(--cc-text); }
+        #cc-brand-sub  { color: var(--cc-text2); }
+
+        /* Chat log */
+        #cc-log {
+            flex: 1; overflow-y: auto; padding: 12px 14px 16px;
+            scrollbar-width: none;
+        }
+        #cc-log::-webkit-scrollbar { display: none; }
+        .cc-turn { margin-bottom: 14px; }
+        .cc-turn-head { margin-bottom: 3px; font-family: var(--cc-font-mono); font-size: 11px; }
+        .cc-prefix { }
+        .cc-assistant-prefix { color: var(--cc-blue); }
+        .cc-label  { color: var(--cc-text2); margin-left: 8px; }
+        .cc-muted  { color: var(--cc-text2); }
+        .cc-turn-body { line-height: 1.85; }
+        .cc-novel-text { font-family: var(--cc-font-sans); white-space: pre-wrap; font-size: 13px; user-select: text; }
+        .cc-analysis-text { font-family: var(--cc-font-mono); font-size: 12px; color: var(--cc-text); margin-bottom: 6px; }
+
+        /* Diff block */
+        .cc-diff-block {
+            margin-top: 8px; border: 0.5px solid var(--cc-border);
+            border-radius: 4px; overflow: hidden; background: var(--cc-bg3);
+        }
+        .cc-diff-head {
+            display: flex; padding: 4px 8px; background: var(--cc-bg2);
+            font-family: var(--cc-font-mono); font-size: 11px;
+        }
+        .cc-diff-file { color: var(--cc-text); }
+        .cc-diff-meta { margin-left: 8px; }
+        .cc-diff-body { font-family: var(--cc-font-mono); font-size: 11.5px; line-height: 1.6; }
+        .cc-diff-line { display: flex; padding: 0 6px; white-space: pre; }
+        .cc-diff-sign { width: 12px; flex: 0 0 12px; color: var(--cc-text3); }
+        .cc-diff-code { white-space: pre; }
+        .cc-diff-add { background: var(--cc-diff-add-bg); }
+        .cc-diff-add .cc-diff-code, .cc-diff-add .cc-diff-sign { color: var(--cc-diff-add-fg); }
+        .cc-diff-del { background: var(--cc-diff-del-bg); }
+        .cc-diff-del .cc-diff-code, .cc-diff-del .cc-diff-sign { color: var(--cc-diff-del-fg); }
+        .cc-diff-ctx .cc-diff-code { color: var(--cc-text2); }
+
+        /* Weread canvas turn */
+        .cc-canvas-turn .cc-canvas-body {
+            margin-top: 4px; background: #1e1e1e; display: inline-block;
+            border: 1px solid var(--cc-border2); border-radius: 2px;
+        }
+        .cc-canvas-turn .wr_canvasContainer {
+            position: relative !important; margin: 0 auto; pointer-events: none;
+        }
+        .cc-canvas-turn canvas { pointer-events: none; filter: invert(1) hue-rotate(20deg) brightness(1.9) contrast(1.2); opacity: ${config.ideCanvasOpacity || 1}; }
+
+        /* Composer */
+        #cc-composer { padding: 8px 12px 10px; border-top: 1px solid var(--cc-border); flex-shrink: 0; }
+        .cc-composer-box {
+            border: 1px solid var(--cc-border2); border-radius: 8px;
+            background: #2d2d2d; padding: 8px 10px 6px;
+        }
+        .cc-input {
+            width: 100%; resize: none; background: transparent; color: var(--cc-text);
+            border: none; padding: 0; font-family: var(--cc-font-mono); font-size: 12.5px;
+            line-height: 1.5; outline: none; height: 20px;
+        }
+        .cc-toolbar {
+            display: flex; align-items: center; justify-content: space-between; margin-top: 5px;
+        }
+        .cc-tb-btn {
+            background: transparent; color: var(--cc-text2); border: 1px solid transparent;
+            border-radius: 5px; width: 24px; height: 22px; font-size: 13px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center; font-family: var(--cc-font-mono);
+        }
+        .cc-tb-hint { font-family: var(--cc-font-mono); font-size: 11px; color: var(--cc-text3); }
+        .cc-send-btn {
+            background: var(--cc-accent); color: #fff; border: none; border-radius: 50%;
+            width: 26px; height: 26px; font-size: 14px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        /* Statusbar */
+        #ide-statusbar {
+            height: 22px; background: var(--cc-accent);
+            display: flex; align-items: center; padding: 0 12px; gap: 16px;
+            font-size: 11px; color: #fff; flex-shrink: 0; font-family: var(--cc-font-mono);
+        }
+        .ide-status-item { white-space: nowrap; }
+
+        /* Modal dark overrides */
+        #ide-page .disguised-modal-wrapper { background: #252526; border-color: #454545; }
+        #ide-page .disguised-modal-header  { background: #3c3c3c; }
+        #ide-page .disguised-modal-title   { color: var(--cc-text); }
+        #ide-page .disguised-modal-body    { background: #252526; color: var(--cc-text); }
+        #ide-page .nd-settings-form-group label { color: var(--cc-text); }
+        #ide-page .nd-settings-form-group select,
+        #ide-page .nd-settings-form-group input[type=range] { background: #3c3c3c; border-color: #555; color: var(--cc-text); }
+        #ide-page .nd-settings-form-group button { background: #3a3a3a; border-color: #555; color: var(--cc-text); }
+        #ide-page .nd-settings-form-group button:hover { background: #505050; }
+        .nd_msg { z-index: 999999 !important; }
+        `);
+
+        $('body').children().hide();
+
+        // Build left pane: file tree + code editor
+        const fileTree = _fakeFileTree();
+        const treeHtml = fileTree.map(function (item) {
+            const indent = (item.indent * 14) + 4;
+            const cls = 'ide-tree-item' + (item.active ? ' active' : '');
+            const icon = item.isDir ? (item.open ? '▾ ' : '▸ ') : '&#128196;';
+            return '<div class="' + cls + '" style="padding-left:' + indent + 'px;"><span class="ide-tree-icon">' + icon + '</span><span>' + item.name + '</span></div>';
+        }).join('');
+
+        const codeTokens = _fakeLeftEditorCode();
+        const linesHtml = (function () {
+            let lineNum = 1;
+            let out = '';
+            let cur = '';
+            const flush = function () {
+                out += '<div class="le-line"><span class="le-num">' + lineNum + '</span><span>' + cur + '</span></div>';
+                lineNum++;
+                cur = '';
+            };
+            codeTokens.forEach(function (tok) {
+                if (tok.t === 'br' || (tok.t === 'pl' && tok.c === '')) {
+                    flush();
+                    return;
+                }
+                // detect newlines within token
+                const parts = tok.c.split('\n');
+                parts.forEach(function (part, idx) {
+                    if (idx > 0) flush();
+                    if (part) cur += '<span class="le-' + tok.t + '">' + part.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>';
+                });
+            });
+            if (cur) flush();
+            return out;
+        })();
+
+        const $layout = $('<div id="ide-page"></div>');
+
+        $layout.append($('<div id="ide-titlebar">' +
+            '<div class="ide-titlebar-dot" style="background:#ff5f56;"></div>' +
+            '<div class="ide-titlebar-dot" style="background:#ffbd2e;"></div>' +
+            '<div class="ide-titlebar-dot" style="background:#27c93f;"></div>' +
+            '<div id="ide-window-title">无标题（工作区）</div>' +
+            '<div style="font-size:11px;color:#858585;cursor:pointer;">Upgrade to Pro</div>' +
+        '</div>'));
+
+        const $mainRow = $('<div id="ide-main-row"></div>');
+
+        // Activity bar
+        $mainRow.append($('<div id="ide-activitybar">' +
+            '<div class="ide-activity-icon active" title="资源管理器">⊟</div>' +
+            '<div class="ide-activity-icon" title="搜索">&#128269;</div>' +
+            '<div class="ide-activity-icon" title="源代码管理">&#x2387;</div>' +
+            '<div class="ide-activity-icon" title="运行">&#9655;</div>' +
+        '</div>'));
+
+        // Sidebar (file tree)
+        $mainRow.append($('<div id="ide-sidebar"><div id="ide-sidebar-title">资源管理器</div>' + treeHtml + '</div>'));
+
+        // Editor column (fake code, no terminal)
+        const $editorCol = $('<div id="ide-editor-col"></div>');
+        $editorCol.append($('<div id="ide-tabbar"><div class="ide-tab active"><span>&#128196;</span><span>agent.ts</span><span style="font-size:13px;opacity:0.6;margin-left:4px;">✕</span></div></div>'));
+        $editorCol.append($('<div id="ide-editor"><div id="ide-editor-lines">' + linesHtml + '</div></div>'));
+        $mainRow.append($editorCol);
+
+        // Right pane: Claude Code chat
+        const $rightPane = $('<div id="ide-right-pane"></div>');
+        $rightPane.append($('<div id="cc-titlebar">' +
+            '<span id="cc-brand-icon">✳</span>' +
+            '<span id="cc-brand-name">Claude</span>' +
+            '<span id="cc-brand-sub" class="cc-muted"></span>' +
+        '</div>'));
+        $rightPane.append($('<div id="cc-log" tabindex="0"></div>'));
+        $rightPane.append($('<div id="cc-composer">' +
+            '<div class="cc-composer-box">' +
+            '<textarea class="cc-input" rows="1" placeholder="Ask Claude…  / for commands" readonly></textarea>' +
+            '<div class="cc-toolbar">' +
+            '<div style="display:flex;gap:6px;align-items:center;">' +
+            '<button class="cc-tb-btn" title="Add context">+</button>' +
+            '<button class="cc-tb-btn" title="Boss mode">&lt;/&gt;</button>' +
+            '</div>' +
+            '<div style="display:flex;gap:8px;align-items:center;">' +
+            '<span class="cc-tb-hint">Ask before edits</span>' +
+            '<button class="cc-send-btn" title="Send">↑</button>' +
+            '</div>' +
+            '</div></div></div>'));
+
+        // Pre-insert weread canvas slot turn (always present for weread() to append into)
+        const $canvasTurn = $('<div class="cc-turn cc-canvas-turn"></div>');
+        const $canvasHead = $('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span><span class="cc-label cc-muted"> rendered page</span></div>');
+        const $canvasBody = $('<div class="cc-canvas-body" id="ide-weread-canvas-slot"></div>');
+        $canvasTurn.append($canvasHead);
+        $canvasTurn.append($canvasBody);
+        $('#cc-log', $rightPane).append($canvasTurn);
+
+        $mainRow.append($rightPane);
+
+        // Terminal — full width below main row
+        const $terminal = $('<div id="ide-terminal">' +
+            '<div id="ide-terminal-tabs"><div class="ide-term-tab active">终端</div><div class="ide-term-tab">调试控制台</div><div class="ide-term-tab">输出</div></div>' +
+            '<div id="ide-terminal-body">' +
+            '<div class="t-prompt">xmilesdesign cursor % python3 agent.ts</div>' +
+            '<div class="t-log">2026-06-30 14:48:29.621 Python[64925] +[IMKClient subclass]: chose IMKClient_Modern</div>' +
+            '<div class="t-info">>> Agent initialized, waiting for tasks...</div>' +
+            '<div class="t-prompt">xmilesdesign cursor %</div>' +
+            '</div></div>');
+
+        // Body wrapper stacks main-row + terminal
+        const $body = $('<div id="ide-body"></div>');
+        $body.append($mainRow);
+        $body.append($terminal);
+        $layout.append($body);
+
+        $layout.append($('<div id="ide-statusbar">' +
+            '<div class="ide-status-item" id="ide-status-first">&#x2387; main</div>' +
+            '<div class="ide-status-item">zsh — cursor</div>' +
+            '<div class="ide-status-item" style="margin-left:auto;">Ln 29, Col 1</div>' +
+            '<div class="ide-status-item">UTF-8</div>' +
+            '<div class="ide-status-item">TypeScript</div>' +
+        '</div>'));
+
+        $layout.appendTo('body');
+
+        _ideBuilt = true;
+
+        // Flush any lines collected before layout was ready
+        if (_ideNovelLines.length > 0) {
+            const buffered = _ideNovelLines.slice();
+            _ideNovelLines = [];
+            _ideParagraphCount = 0;
+            buffered.forEach(function (text) {
+                _appendChatNovelTurn(text);
+            });
+        }
+    }
+
+    function overridePageTitleIDE() {
+        document.title = '无标题（工作区）';
+    }
+
+    function setDisguisedTitleIDE(titleStr) {
+        $('#ide-window-title').text(titleStr + ' — Cursor');
+        $('#cc-brand-sub').text('· ' + (titleStr || ''));
+    }
+
+    function setDisguisedFooterIDE(detail) {
+        const $first = $('#ide-status-first');
+        if (typeof detail === 'string' && detail) {
+            $first.text('&#x2387; main  ' + detail.trim().slice(0, 40));
+        }
+    }
+
+
     ///////////////////////////// 站点开始
 
     /**
      * 起点
      */
     function qidian() {
+        const isCode = config.disguiseMode === DICT.DISGUISE_MODE.CODE;
+
         GM_addStyle(`
         #right-container {
             position: unset;
@@ -1405,7 +2309,7 @@
         .review-icon { background: var(--surface-gray-100) !important; }
         .review-count { color: var(--surface-gray-200) !important; }
         .tooltip-wrapper { display: none; }
-        #side-sheet div, #side-sheet section { background-color: #FFF; }
+        #side-sheet div, #side-sheet section { background-color: ${isCode ? '#1e1e1e' : '#FFF'}; }
         .chapter-date { background: unset !important; }
         button {
             background-color: ${link_bg_color} !important;
@@ -1422,13 +2326,29 @@
         const dataType = $mainContent.attr('data-type');
         const $tbody = $(".excel-table tbody");
 
+        function _setContent($el, type, clone) {
+            if (isCode) {
+                let lines;
+                if (type === 'p') {
+                    lines = (clone ? $el.children('p').clone() : $el.children('p')).toArray()
+                        .map(function (p) { return $(p).text().trim(); })
+                        .filter(Boolean);
+                } else {
+                    lines = $el.html().split('<br>').map(function (l) { return $(l).text ? $(l).text() : l; });
+                }
+                _pushIdeLines(lines);
+            } else {
+                setExcelContent($el, type, clone);
+            }
+        }
+
         const scriptContent = $('#vite-plugin-ssr_pageContext').html();
         if (scriptContent && scriptContent.includes('"freeStatus":0')) {
             // 免费
-            setExcelContent($("main.content"), 'p', true);
+            _setContent($("main.content"), 'p', true);
             setTimeout(function () {
-                setExcelContent($("main.content"), 'p');
-                setExcelLines([$(".nav-btn-group")], true);
+                _setContent($("main.content"), 'p');
+                if (!isCode) setExcelLines([$(".nav-btn-group")], true);
                 setInfo();
             }, 2000);
         } else {
@@ -1439,13 +2359,15 @@
                 const callback = function (mutationsList, observer) {
                     for (let mutation of mutationsList) {
                         if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                            $tbody.attr("id", contentId);
-                            $tbody.attr("data-type", dataType);
-                            $tbody.addClass("content");
-                            setExcelContent($("main.content"), 'p', true);
+                            if (!isCode) {
+                                $tbody.attr("id", contentId);
+                                $tbody.attr("data-type", dataType);
+                                $tbody.addClass("content");
+                            }
+                            _setContent($("main.content"), 'p', true);
                             setTimeout(function () {
-                                setExcelContent($("main.content"), 'p');
-                                setExcelLines([$(".nav-btn-group")], true);
+                                _setContent($("main.content"), 'p');
+                                if (!isCode) setExcelLines([$(".nav-btn-group")], true);
                             }, 2000);
                             setInfo();
                             observer.disconnect();
@@ -1457,34 +2379,51 @@
                 observer.observe(targetNode, observerConfig);
             } else {
                 // 未解锁
-                setExcelLines($(".chapter-wrapper section:not(#r-recommends) > div:not(.download)").toArray());
+                if (isCode) {
+                    const lines = $(".chapter-wrapper section:not(#r-recommends) > div:not(.download)").toArray()
+                        .map(function (el) { return $(el).text().trim(); }).filter(Boolean);
+                    _pushIdeLines(lines);
+                } else {
+                    setExcelLines($(".chapter-wrapper section:not(#r-recommends) > div:not(.download)").toArray());
+                }
             }
         }
         setInfo();
 
-        addExcelStyle(`
-            #disguised-page #disguised-body table.excel-table tbody:not(thead) tr .nav-btn-group a {
-                font-family: "Microsoft YaHei", "SimSun", sans-serif !important;
-            }
-            #disguised-page #disguised-body table.excel-table tbody td:not(:nth-child(1)):not(:nth-child(2)) {
-                font-family: "Microsoft YaHei", "SimSun", sans-serif !important;
-            }
-            .nav-btn { padding: 0; }
-            .excel-table button {
-                padding: 0;
-                font-size: unset;
-                line-height: unset;
-                height: 20px;
-            }
-        `);
+        if (!isCode) {
+            addExcelStyle(`
+                #disguised-page #disguised-body table.excel-table tbody:not(thead) tr .nav-btn-group a {
+                    font-family: "Microsoft YaHei", "SimSun", sans-serif !important;
+                }
+                #disguised-page #disguised-body table.excel-table tbody td:not(:nth-child(1)):not(:nth-child(2)) {
+                    font-family: "Microsoft YaHei", "SimSun", sans-serif !important;
+                }
+                .nav-btn { padding: 0; }
+                .excel-table button {
+                    padding: 0;
+                    font-size: unset;
+                    line-height: unset;
+                    height: 20px;
+                }
+            `);
+        }
 
         function setInfo() {
             const titleEl = $('.chapter-wrapper h1.title');
-            setDisguisedTitle(titleEl.children().remove().end().text());
+            const titleText = titleEl.children().remove().end().text();
+            if (isCode) {
+                setDisguisedTitleIDE(titleText);
+            } else {
+                setDisguisedTitle(titleText);
+            }
             titleEl.hide();
 
             const infoEl = titleEl.next();
-            setDisguisedFooter(infoEl.children());
+            if (isCode) {
+                setDisguisedFooterIDE(infoEl.text());
+            } else {
+                setDisguisedFooter(infoEl.children());
+            }
             infoEl.hide();
 
             const downloadEl = $('#r-authorSay :contains("下载App")');
@@ -1494,7 +2433,7 @@
         setTimeout(function () {
             const admireBtnEl = $('._admireBtn_131ir_200');
             admireBtnEl.hide();
-            $('body').attr('data-theme', 'beige');
+            if (!isCode) $('body').attr('data-theme', 'beige');
         }, 2000);
     }
 
@@ -1502,6 +2441,8 @@
      * 番茄
      */
     function fanqie() {
+        const isCode = config.disguiseMode === DICT.DISGUISE_MODE.CODE;
+
         GM_addStyle(`
         .muye-reader-nav { display: none !important; }
         .byte-btn {
@@ -1515,31 +2456,45 @@
         `);
 
         const titleEl = $('h1.muye-reader-title');
-        setDisguisedTitle(titleEl.text());
+        const titleText = titleEl.text();
+        if (isCode) {
+            setDisguisedTitleIDE(titleText);
+        } else {
+            setDisguisedTitle(titleText);
+        }
         titleEl.remove();
 
         const infoEl = $('.muye-reader-subtitle');
-        setDisguisedFooter(infoEl.children());
+        if (isCode) {
+            setDisguisedFooterIDE(infoEl.text());
+        } else {
+            setDisguisedFooter(infoEl.children());
+        }
         infoEl.hide();
 
-        const $readerBox = $('.muye-reader-box');
-        if ($readerBox.length) {
-            const styleAttr = $readerBox.attr('style') || '';
-            addExcelStyle(`
-            .excel-table tbody td p {
-                ${styleAttr}
+        if (!isCode) {
+            const $readerBox = $('.muye-reader-box');
+            if ($readerBox.length) {
+                const styleAttr = $readerBox.attr('style') || '';
+                addExcelStyle(`.excel-table tbody td p { ${styleAttr} }`);
             }
+        }
+
+        if (isCode) {
+            const lines = $(".muye-reader-content>div>p").toArray()
+                .map(function (p) { return $(p).text().trim(); }).filter(Boolean);
+            _pushIdeLines(lines);
+        } else {
+            setExcelLines($(".muye-reader-content>div>p").toArray());
+            setExcelLines([$(".muye-reader-btns")], true);
+            addExcelStyle(`
+                .muye-reader-btns button {
+                    height: 20px !important;
+                    line-height: 20px !important;
+                }
             `);
         }
 
-        setExcelLines($(".muye-reader-content>div>p").toArray());
-        setExcelLines([$(".muye-reader-btns")], true);
-        addExcelStyle(`
-            .muye-reader-btns button {
-                height: 20px !important;
-                line-height: 20px !important;
-            }
-        `);
         $(".muye-reader-btns button").on("click", function () {
             setTimeout(function () { location.reload(); }, 200);
         });
@@ -1557,6 +2512,7 @@
      * 在 canvas rowspan 之后追加文字行.
      */
     function weread(cache) {
+        const isCode = config.disguiseMode === DICT.DISGUISE_MODE.CODE;
         // 微信读书用 window.innerHeight 当渲染范围上限, span/canvas 只在 y < innerHeight
         // 内生成. 必须设大到能覆盖整章 (实测一章可达 y=8000+, 这里给到 50000 余量足够).
         // 注意: 不能改 window 本身, 只能用 defineProperty 覆盖 getter.
@@ -1585,6 +2541,7 @@
         }
         /* 伪装层始终在最上面 */
         #disguised-page { z-index: 100000; }
+        #ide-page { z-index: 100000; }
 
         .readerTopBar, .readerControls, .readerNotePanel,
         .readerCatalog, .reader-font-control-panel-wrapper,
@@ -1626,7 +2583,7 @@
         }
         `);
 
-        // 把 common() 加在 #app 上的 inline display:none 移除
+        // 把 common()/commonIDE() 加在 #app 上的 inline display:none 移除
         $('#app').css('display', '');
 
         function waitForCanvas(maxWaitMs, onReady, onTimeout) {
@@ -1688,15 +2645,20 @@
         }
 
         // 提前给个占位标题, 真正的章节名等 Vue 渲染完再读取
-        setDisguisedTitle("工作簿1");
-        setDisguisedFooter("");
+        if (isCode) { setDisguisedTitleIDE('工作簿1'); } else { setDisguisedTitle('工作簿1'); }
+        if (!isCode) setDisguisedFooter('');
 
         function refreshTitleFromDOM() {
             const chapterTitle = $('.readerTopBar_title_chapter').text().trim();
             const bookTitle = $('.readerTopBar_title_link').text().trim();
-            if (chapterTitle) setDisguisedTitle(chapterTitle);
-            if (bookTitle) setDisguisedFooter(`《${bookTitle}》`);
-            printLog(`刷新标题: 章节="${chapterTitle}", 书名="${bookTitle}"`);
+            if (isCode) {
+                if (chapterTitle) setDisguisedTitleIDE(chapterTitle);
+                if (bookTitle) setDisguisedFooterIDE('《' + bookTitle + '》');
+            } else {
+                if (chapterTitle) setDisguisedTitle(chapterTitle);
+                if (bookTitle) setDisguisedFooter('《' + bookTitle + '》');
+            }
+            printLog('刷新标题: 章节="' + chapterTitle + '", 书名="' + bookTitle + '"');
         }
 
         // 把 phase 1 抓到的字符列表 (按 y, x 聚类成行) 追加到 canvas rowspan 之后.
@@ -1722,8 +2684,13 @@
                 }
             }
             if (cur.length) lines.push(cur.map(function (c) { return c.text; }).join(''));
-            setExcelLines(lines, true);
-            printLog(`已追加 ${lines.length} 行缓存文字到 excel`);
+            if (isCode) {
+                _pushIdeLines(lines);
+                printLog('已追加 ' + lines.length + ' 行缓存文字到 IDE 编辑器');
+            } else {
+                setExcelLines(lines, true);
+                printLog('已追加 ' + lines.length + ' 行缓存文字到 excel');
+            }
         }
 
         waitForCanvas(15000, function ($container, canvasTotalHeight, canvasPaintedHeight) {
@@ -1731,22 +2698,30 @@
             refreshTitleFromDOM();
             const rowHeight = 22;
             const scale = config.wereadCanvasScale || 1;
-            // 用实际绘制覆盖高度而非容器声明高度 — 后者会留下大段空白下不去看见文字.
-            // 实际绘制不到时回退到容器高度避免裁剪.
             const effectiveCanvasHeight = canvasPaintedHeight > 100 ? canvasPaintedHeight : canvasTotalHeight;
             const scaledCanvasHeight = Math.ceil(effectiveCanvasHeight * scale);
-            const canvasRowSpan = Math.max(5, Math.ceil(scaledCanvasHeight / rowHeight));
-
-            const $tbody = $(".excel-table > tbody");
-            $tbody.empty();
-            resetBigChartState();
-            insertTitleRow();
 
             // 读取容器原始宽度 (微信读书固定 798), 准备缩放
             const origStyleAttr = $container.attr('style') || '';
             const widthMatch = origStyleAttr.match(/width:\s*([\d.]+)px/i);
             const origWidth = widthMatch ? parseInt(widthMatch[1]) : 798;
             const scaledWidth = Math.ceil(origWidth * scale);
+
+            // 代码模式切片: 必须在 detach() 前采集 canvas 几何信息 (detach 后 position() 失效)
+            const sourceCanvases = [];
+            if (isCode) {
+                const containerTop = $container.offset() ? $container.offset().top : 0;
+                $container.find('canvas').each(function () {
+                    const el = this;
+                    const elTop = $(el).offset() ? $(el).offset().top : 0;
+                    sourceCanvases.push({
+                        el: el,
+                        offsetY: elTop - containerTop, // Y 相对于容器顶部, 原始CSS像素
+                        h: el.height,                  // canvas 的像素高度 (物理像素)
+                        w: el.width
+                    });
+                });
+            }
 
             const $detachedContainer = $container.detach();
 
@@ -1758,7 +2733,7 @@
                 position: 'relative'
             });
             $detachedContainer.css({
-                transform: `scale(${scale})`,
+                transform: 'scale(' + scale + ')',
                 'transform-origin': 'top left',
                 position: 'absolute',
                 top: '0',
@@ -1766,53 +2741,140 @@
             });
             $scaleWrapper.append($detachedContainer);
 
-            const $firstRow = $('<tr></tr>');
-            $firstRow.append($('<td></td>').text(1));
-            const $canvasCell = $('<td class="weread-canvas-cell disguised-content-cell"></td>').attr('rowspan', canvasRowSpan);
-            $scaleWrapper.appendTo($canvasCell);
-            $firstRow.append($canvasCell);
-            appendEmptyColsForRow($firstRow);
-            $tbody.append($firstRow);
+            let $canvasHostEl; // used by reRenderObserver to avoid matching detached canvas
 
-            for (let r = 2; r <= canvasRowSpan; r++) {
-                const $tr = $('<tr></tr>');
-                $tr.append($('<td></td>').text(r));
-                appendEmptyColsForRow($tr);
-                $tbody.append($tr);
+            if (isCode) {
+                // 代码模式: 把 canvas 切割成若干片, 每片之间穿插 diff 块
+                const $log = $('#cc-log');
+                // 清除旧的占位槽 turn (commonIDE 预建的那个)
+                $log.find('.cc-canvas-turn').remove();
+
+                if (!sourceCanvases.length) {
+                    // 没有 canvas 元素, 降级: 直接塞进旧槽
+                    const $slot = $('<div class="cc-canvas-body"></div>');
+                    const $turn = $('<div class="cc-turn cc-canvas-turn"></div>');
+                    $turn.append($('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span><span class="cc-label cc-muted"> rendered page</span></div>'));
+                    $turn.append($slot);
+                    $scaleWrapper.appendTo($slot);
+                    $log.append($turn);
+                    $canvasHostEl = $scaleWrapper;
+                } else {
+                    // offsetY 是 CSS 像素, canvas.height 是物理像素
+                    // 统一换算到 CSS 像素做切割, drawImage 时再乘 dpr 取物理行
+                    const dpr = window.devicePixelRatio || 1;
+                    // 每片高度: CSS像素, 对应约一屏内容
+                    const sliceHeightCSS = 300;
+                    const numSlices = Math.max(1, Math.ceil(effectiveCanvasHeight / sliceHeightCSS));
+                    const filterVal = 'invert(1) hue-rotate(20deg) brightness(1.9) contrast(1.2)';
+                    const opacityVal = config.ideCanvasOpacity || 1;
+
+                    for (let si = 0; si < numSlices; si++) {
+                        const sliceYcss = si * sliceHeightCSS;           // CSS px, top of slice
+                        const sliceHcss = Math.min(sliceHeightCSS, effectiveCanvasHeight - sliceYcss);
+
+                        // 输出 canvas 大小 = CSS 尺寸 * scale (用户缩放)
+                        const outCanvas = document.createElement('canvas');
+                        outCanvas.width  = Math.ceil(origWidth * scale);
+                        outCanvas.height = Math.ceil(sliceHcss * scale);
+                        // CSS display size matches output pixels (no extra scaling)
+                        outCanvas.style.width  = Math.ceil(origWidth * scale) + 'px';
+                        outCanvas.style.height = Math.ceil(sliceHcss * scale) + 'px';
+                        const ctx2d = outCanvas.getContext('2d');
+
+                        sourceCanvases.forEach(function (src) {
+                            // src.offsetY is CSS px from container top
+                            // src.h / src.w are physical pixels
+                            const srcTopCSS = src.offsetY;
+                            const srcHcss   = src.h / dpr;
+                            const srcBotCSS = srcTopCSS + srcHcss;
+
+                            const clipTopCSS = Math.max(sliceYcss, srcTopCSS);
+                            const clipBotCSS = Math.min(sliceYcss + sliceHcss, srcBotCSS);
+                            if (clipBotCSS <= clipTopCSS) return;
+
+                            // Convert clip bounds back to physical pixels for drawImage source
+                            const srcPhysRow  = Math.round((clipTopCSS - srcTopCSS) * dpr);
+                            const drawPhysH   = Math.round((clipBotCSS - clipTopCSS) * dpr);
+                            const srcPhysW    = src.w;
+
+                            // Destination in output canvas pixels
+                            const dstY  = Math.round((clipTopCSS - sliceYcss) * scale);
+                            const dstH  = Math.round((clipBotCSS - clipTopCSS) * scale);
+                            const dstW  = Math.ceil(origWidth * scale);
+
+                            ctx2d.drawImage(src.el,
+                                0, srcPhysRow, srcPhysW, drawPhysH,  // source (physical px)
+                                0, dstY,       dstW,     dstH         // dest (output canvas px)
+                            );
+                        });
+
+                        // 包装成 cc-turn
+                        const $turn = $('<div class="cc-turn cc-canvas-turn"></div>');
+                        $turn.append($('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span><span class="cc-label cc-muted"> rendered page (' + (si + 1) + '/' + numSlices + ')</span></div>'));
+                        const $body = $('<div class="cc-canvas-body"></div>');
+                        $(outCanvas).css({ display: 'block', filter: filterVal, opacity: opacityVal, pointerEvents: 'none' });
+                        $body.append(outCanvas);
+                        $turn.append($body);
+                        $log.append($turn);
+
+                        // 每片后按概率插入 diff 块
+                        const n = _diffPlan(0.55);
+                        for (let di = 0; di < n; di++) { _appendChatDiffTurn($log); }
+                    }
+                    $canvasHostEl = $container; // 原始容器保留在 DOM 外(已 detach), 仅用于 observer
+                    $log.scrollTop(0);
+                }
+
+                _applyIdeCanvasFilter(config.ideCanvasOpacity || 1);
+
+                // 文字层 (Ctrl+F 可搜) 和章节切换逻辑与 excel 模式相同
+                try {
+                    appendCachedText(cache && cache.chars);
+                } catch (e) {
+                    printLog('warn', '追加缓存文字失败: ' + e.message);
+                }
+            } else {
+                const canvasRowSpan = Math.max(5, Math.ceil(scaledCanvasHeight / rowHeight));
+                const $tbody = $('.excel-table > tbody');
+                $tbody.empty();
+                resetBigChartState();
+                insertTitleRow();
+
+                const $firstRow = $('<tr></tr>');
+                $firstRow.append($('<td></td>').text(1));
+                const $canvasCell = $('<td class="weread-canvas-cell disguised-content-cell"></td>').attr('rowspan', canvasRowSpan);
+                $scaleWrapper.appendTo($canvasCell);
+                $firstRow.append($canvasCell);
+                appendEmptyColsForRow($firstRow);
+                $tbody.append($firstRow);
+
+                for (let r = 2; r <= canvasRowSpan; r++) {
+                    const $tr = $('<tr></tr>');
+                    $tr.append($('<td></td>').text(r));
+                    appendEmptyColsForRow($tr);
+                    $tbody.append($tr);
+                }
+
+                try {
+                    appendCachedText(cache && cache.chars);
+                } catch (e) {
+                    printLog('warn', '追加缓存文字失败 (不影响 canvas 部分): ' + e.message);
+                }
+                buildNavRow($tbody, getExcelLastIndex() + 1);
+                $canvasHostEl = $canvasCell;
             }
 
-            // 用缓存的字符在 canvas 下方追加文字行 (供 Ctrl+F 搜索), 然后再画 nav 行
-            try {
-                appendCachedText(cache && cache.chars);
-            } catch (e) {
-                printLog('warn', '追加缓存文字失败 (不影响 canvas 部分): ' + e.message);
-            }
-            buildNavRow($tbody, getExcelLastIndex() + 1);
-
-            // 章节切换检测: 多路触发, 任意一路命中就跳转, phase 1 重新抓取.
-            // 1) 键盘左右方向键 = weread 内置上一章/下一章快捷键
-            // 2) URL 变化 (popstate / hashchange / pushState polling)
-            // 3) DOM 出现新的 wr_canvasContainer (兜底, 比如点 nav 按钮触发的)
-            //
-            // ⚠ 关键 bug 修复 — 不能直接 location.reload(). weread 切章流程是:
-            //   t=0    pushState 把 URL 切到下一章 (地址栏立刻更新)
-            //   t=??   AJAX 加载新章节
-            //   t=??   若 AJAX 被 reload 中断, weread 会 replaceState 把 URL 改回当前章
-            // 200ms 后 location.reload() 触发时, location.href 可能已经被改回旧章,
-            // 结果 reload 加载的是旧章, 永远卡在当前章节出不去.
-            // 修复: 第一时间捕获新 URL, 用 location.assign(captured) 强制跳到捕获到的 URL,
-            // 即便 weread 之后改回去也不影响 — 我们手里的 URL 才是权威.
+            // 章节切换检测 (两种模式相同逻辑)
             const initialHref = location.href;
             let reloadScheduled = false;
             function scheduleReload(reason, targetUrl) {
                 if (reloadScheduled) return;
                 reloadScheduled = true;
                 const target = targetUrl || location.href;
-                printLog(`检测到章节切换 (${reason}), 准备跳转到 ${target}`);
+                printLog('检测到章节切换 (' + reason + '), 准备跳转到 ' + target);
                 setTimeout(function () {
                     if (target !== location.href) {
-                        // weread 已把 URL 改回去, 用捕获到的新 URL 强制跳转
-                        printLog(`URL 已被 weread 改回 ${location.href}, 用捕获的 ${target} 强制跳转`);
+                        printLog('URL 已被 weread 改回 ' + location.href + ', 用捕获的 ' + target + ' 强制跳转');
                         location.assign(target);
                     } else {
                         location.reload();
@@ -1826,8 +2888,6 @@
                 if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target && event.target.isContentEditable)) return;
                 if (reloadScheduled) return;
 
-                // 不能立刻调 scheduleReload — 此刻 weread 还没 pushState, location.href 仍是旧 URL.
-                // 50ms 短轮询观察 URL 变化, 抓到新 URL 再排 reload, 1 秒超时 (weread 没响应就放弃).
                 const startUrl = location.href;
                 let attempts = 0;
                 const captureTimer = setInterval(function () {
@@ -1836,11 +2896,11 @@
                     if (location.href !== startUrl) {
                         clearInterval(captureTimer);
                         const newUrl = location.href;
-                        printLog(`方向键 ${event.key}: URL ${startUrl} → ${newUrl}`);
+                        printLog('方向键 ' + event.key + ': URL ' + startUrl + ' → ' + newUrl);
                         scheduleReload('方向键 ' + event.key, newUrl);
                     } else if (attempts >= 20) {
                         clearInterval(captureTimer);
-                        printLog('warn', `方向键 ${event.key} 按下 1s 后 URL 未变化, 不 reload`);
+                        printLog('warn', '方向键 ' + event.key + ' 按下 1s 后 URL 未变化, 不 reload');
                     }
                 }, 50);
             };
@@ -1852,15 +2912,13 @@
             window.addEventListener('hashchange', function () {
                 if (location.href !== initialHref) scheduleReload('hashchange', location.href);
             });
-            // pushState/replaceState 不触发任何事件, 只能轮询比较 href.
-            // 100ms 而非 500ms — 越早捕获新 URL 越保险, 防止 weread 后续 replaceState 改回去.
             const hrefPoll = setInterval(function () {
                 if (reloadScheduled) { clearInterval(hrefPoll); return; }
                 if (location.href !== initialHref) scheduleReload('href poll', location.href);
             }, 100);
 
             const reRenderObserver = new MutationObserver(function () {
-                const $newContainer = $('.app_content .wr_canvasContainer').not($canvasCell.find('.wr_canvasContainer'));
+                const $newContainer = $('.app_content .wr_canvasContainer').not($canvasHostEl.find('.wr_canvasContainer'));
                 if ($newContainer.length) {
                     const styleAttr = $newContainer.attr('style') || '';
                     const heightMatch = styleAttr.match(/height:\s*([\d.]+)px/i);
@@ -1872,18 +2930,22 @@
             });
             reRenderObserver.observe(document.body, {childList: true, subtree: true});
         }, function () {
-            const $tbody = $(".excel-table > tbody");
-            $tbody.empty();
-            resetBigChartState();
-            insertTitleRow();
-            const $errRow = $('<tr></tr>');
-            $errRow.append($('<td></td>').text(1));
-            $errRow.append($('<td style="color:#c33;padding:10px !important;">canvas 加载超时, 请刷新页面重试. 如多次失败, 检查 F12 控制台日志.</td>'));
-            for (let i = 0; i < config.emptyCols; i++) {
-                $errRow.append($('<td></td>'));
+            if (isCode) {
+                _pushIdeLines(['[canvas 加载超时, 请刷新页面重试]']);
+            } else {
+                const $tbody = $('.excel-table > tbody');
+                $tbody.empty();
+                resetBigChartState();
+                insertTitleRow();
+                const $errRow = $('<tr></tr>');
+                $errRow.append($('<td></td>').text(1));
+                $errRow.append($('<td style="color:#c33;padding:10px !important;">canvas 加载超时, 请刷新页面重试. 如多次失败, 检查 F12 控制台日志.</td>'));
+                for (let i = 0; i < config.emptyCols; i++) {
+                    $errRow.append($('<td></td>'));
+                }
+                $tbody.append($errRow);
+                buildNavRow($tbody, 2);
             }
-            $tbody.append($errRow);
-            buildNavRow($tbody, 2);
         });
     }
 
@@ -1980,19 +3042,21 @@
             printLog('warn', 'phase 1: 覆盖 innerHeight 失败 ' + e.message);
         }
 
-        // 全屏白色遮罩 + "文档打开中" 文字, 盖住原生页面避免泄露
+        // 全屏遮罩 + "文档打开中" 文字, 盖住原生页面避免泄露
+        const isCodeMask = config.disguiseMode === DICT.DISGUISE_MODE.CODE;
         const $mask = $(`
             <div id="nd-harvest-mask" style="
                 position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-                background: #FFF; z-index: 999999;
+                background: ${isCodeMask ? '#1e1e1e' : '#FFF'}; z-index: 999999;
                 display: flex; align-items: center; justify-content: center;
-                font-family: 'Microsoft YaHei', sans-serif; color: #444; font-size: 16px;
+                font-family: ${isCodeMask ? "'SF Mono', 'Monaco', Consolas, monospace" : "'Microsoft YaHei', sans-serif"};
+                color: ${isCodeMask ? '#858585' : '#444'}; font-size: ${isCodeMask ? '13px' : '16px'};
                 user-select: none;
             ">
                 <div style="text-align: center;">
-                    <div style="font-size: 48px; margin-bottom: 16px;">📄</div>
-                    <div id="nd-harvest-status" style="font-weight: bold;">文档打开中</div>
-                    <div id="nd-harvest-detail" style="font-size: 12px; color: #999; margin-top: 8px;"></div>
+                    <div style="font-size: ${isCodeMask ? '32px' : '48px'}; margin-bottom: 16px;">${isCodeMask ? '⬡' : '📄'}</div>
+                    <div id="nd-harvest-status" style="font-weight: bold; color: ${isCodeMask ? '#569cd6' : 'inherit'};">文档打开中</div>
+                    <div id="nd-harvest-detail" style="font-size: 12px; color: ${isCodeMask ? '#555' : '#999'}; margin-top: 8px;"></div>
                 </div>
             </div>
         `);
@@ -2082,7 +3146,7 @@
                     printLog('error', `harvest 失败: 抓到 0 字 (timeout=${timeout}). 直接进入伪装模式 (无文字层)`);
                 }
                 $mask.remove();
-                common();
+                if (config.disguiseMode === DICT.DISGUISE_MODE.CODE) { commonIDE(); } else { common(); }
                 weread(null);
                 return;
             }
@@ -2125,8 +3189,18 @@
         if (event.key !== 'r' || event.ctrlKey || event.altKey || event.metaKey) return;
         const tag = (event.target && event.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target && event.target.isContentEditable)) return;
-        const hidden = document.body.classList.toggle('boss-mode');
-        printLog(`老板键 R: 正文列 ${hidden ? '已隐藏' : '已显示'}`);
+
+        if (config.disguiseMode === DICT.DISGUISE_MODE.CODE) {
+            const $rp = $('#ide-right-pane');
+            if ($rp.length) {
+                const hidden = $rp.css('display') === 'none';
+                $rp.css('display', hidden ? '' : 'none');
+                printLog(`老板键 R (代码模式): 右侧面板 ${hidden ? '已显示' : '已隐藏'}`);
+            }
+        } else {
+            const hidden = document.body.classList.toggle('boss-mode');
+            printLog(`老板键 R: 正文列 ${hidden ? '已隐藏' : '已显示'}`);
+        }
     });
 
     // 原始模式: 仅提示按 E 开启
@@ -2170,23 +3244,25 @@
     const currentHost = window.location.host;
     printLog('currentHost', currentHost);
 
+    const useCodeMode = config.disguiseMode === DICT.DISGUISE_MODE.CODE;
+
     switch (currentHost) {
         case 'www.qidian.com':
-            common();
+            if (useCodeMode) { commonIDE(); } else { common(); }
             qidian();
             break;
         case 'fanqienovel.com':
-            common();
+            if (useCodeMode) { commonIDE(); } else { common(); }
             fanqie();
             break;
         case 'weread.qq.com': {
             // 两阶段流程:
             //   miss -> phase 1: 不调 common(), 在原生页面遮罩 + 抓 ccn-* span -> 写缓存 -> reload
-            //   hit  -> phase 2: common() + weread(cache), canvas 显示 + 缓存文字行追加
+            //   hit  -> phase 2: common()/commonIDE() + weread(cache)
             const wereadCache = readWereadCache();
             if (wereadCache && wereadCache.chars && wereadCache.chars.length > 0) {
-                printLog(`命中文字缓存 (${wereadCache.chars.length} 字), 直接进入伪装模式`);
-                common();
+                printLog('命中文字缓存 (' + wereadCache.chars.length + ' 字), 直接进入伪装模式');
+                if (useCodeMode) { commonIDE(); } else { common(); }
                 weread(wereadCache);
             } else {
                 printLog('未命中文字缓存, 进入 phase 1: 在原生页面抓取文字');

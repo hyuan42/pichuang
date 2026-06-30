@@ -1843,11 +1843,13 @@
         $log.append($turn);
         _ideLineBuffer = [];
 
-        // 每个文字turn后插入 1~2 个diff或snippet
-        const insertCount = 1 + Math.floor(Math.random() * 2);
-        for (let k = 0; k < insertCount; k++) {
-            if (Math.random() < 0.5) _appendChatDiffTurn($log);
-            else _appendChatCodeSnippetTurn($log);
+        // 每个文字turn后: 随机插入 diff+snippet 组合 或 1~2个snippet
+        if (Math.random() < 0.5) {
+            _appendChatDiffTurn($log);
+            _appendChatCodeSnippetTurn($log);
+        } else {
+            const n = 1 + Math.floor(Math.random() * 2);
+            for (let k = 0; k < n; k++) _appendChatCodeSnippetTurn($log);
         }
     }
     let _ideParagraphCount = 0; // kept for compatibility
@@ -2978,39 +2980,17 @@
                         $body.append(outCanvas);
                         $turn.append($body);
                         $log.append($turn);
+
+                        // 每片canvas后: 随机插入 diff+snippet 组合 或 1~2个snippet
+                        if (Math.random() < 0.5) {
+                            _appendChatDiffTurn($log);
+                            _appendChatCodeSnippetTurn($log);
+                        } else {
+                            const n = 1 + Math.floor(Math.random() * 2);
+                            for (let k = 0; k < n; k++) _appendChatCodeSnippetTurn($log);
+                        }
                     }
 
-                    // 保证每隔 1~2 片插入 1~2 个 diff/snippet 块
-                    (function () {
-                        const $turns = $log.find('.cc-canvas-turn');
-                        function rnd(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
-                        function insertInterleave($after) {
-                            const count = rnd(1, 2);
-                            for (let k = 0; k < count; k++) {
-                                const useDiff = Math.random() < 0.5;
-                                // build turn detached, then insert after $after
-                                const $marker = $('<span style="display:none"></span>');
-                                $after.after($marker);
-                                if (useDiff) {
-                                    _appendChatDiffTurn($log);
-                                } else {
-                                    _appendChatCodeSnippetTurn($log);
-                                }
-                                // move the newly appended turn to after $marker
-                                const $newTurn = $log.children().last();
-                                $marker.after($newTurn);
-                                $marker.remove();
-                                $after = $newTurn;
-                            }
-                        }
-                        let gap = rnd(1, 2);
-                        $turns.each(function (i) {
-                            if (i > 0 && i % gap === 0) {
-                                insertInterleave($(this));
-                                gap = rnd(1, 2);
-                            }
-                        });
-                    })();
                     $canvasHostEl = $container; // 原始容器保留在 DOM 外(已 detach), 仅用于 observer
                     $log.scrollTop(0);
                 }

@@ -2,7 +2,7 @@
 // @name         小说页面伪装
 // @namespace    https://github.com/NiaoBlush/novel-disguise
 // @version      2.12.0-mini
-// @description  适配起点/番茄/微信读书, 仅保留Excel伪装模式. 基于NiaoBlush的novel-disguise脚本(MIT)精简改造.支持excel模式、代码模式。
+// @description  基于NiaoBlush的novel-disguise脚本(MIT)精简改造.仅适配起点/番茄/微信读书，支持excel模式伪装、代码模式伪装。
 // @author       NiaoBlush (modified)
 // @license      MIT
 // @run-at       document-end
@@ -342,21 +342,6 @@
         }).base64;
 
         readerHeight = window.innerHeight - headerHeight - footerHeight;
-    }
-
-    function hideImages({selector, replaceParent = false, indicatorText = '点击显示图片'}) {
-        if (!config.hideImage) return;
-        $(selector).each(function () {
-            const imgSrc = $(this).attr('src');
-            const span = $('<span class="disguised-img-indicator"></span>')
-                .attr('data-src', imgSrc)
-                .text(indicatorText);
-            if (replaceParent) {
-                $(this).parent().replaceWith(span);
-            } else {
-                $(this).replaceWith(span);
-            }
-        });
     }
 
     function registerImageIndicators() {
@@ -1803,7 +1788,7 @@
 
     function _applyIdeCanvasFilter(opacity) {
         const op = Math.max(0.1, Math.min(1, opacity || (config.ideCanvasOpacity || 1)));
-        $('#ide-weread-canvas-slot canvas').css({ filter: 'invert(1) hue-rotate(20deg) brightness(1.9) contrast(1.2)', opacity: op });
+        $('#cc-log .cc-canvas-turn canvas').css({ filter: 'invert(1) hue-rotate(20deg) brightness(1.9) contrast(1.2)', opacity: op });
     }
 
     function _pushIdeLines(lines) {
@@ -1869,18 +1854,6 @@
         $diff.append($dBody);
         $body.append($diff);
         $log.append($turn);
-    }
-
-    function _rebuildIdeEditor() {
-        if (!_ideBuilt) return;
-        const $log = $('#cc-log');
-        if (!$log.length) return;
-        $log.find('.cc-turn:not(.cc-canvas-turn)').remove();
-        _ideParagraphCount = 0;
-        _ideNovelLines.forEach(function (text) {
-            _appendChatNovelTurn(text);
-        });
-        $log.scrollTop(0);
     }
 
     function commonIDE() {
@@ -2225,14 +2198,6 @@
             '<button class="cc-send-btn" title="Send">↑</button>' +
             '</div>' +
             '</div></div></div>'));
-
-        // Pre-insert weread canvas slot turn (always present for weread() to append into)
-        const $canvasTurn = $('<div class="cc-turn cc-canvas-turn"></div>');
-        const $canvasHead = $('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span><span class="cc-label cc-muted"> rendered page</span></div>');
-        const $canvasBody = $('<div class="cc-canvas-body" id="ide-weread-canvas-slot"></div>');
-        $canvasTurn.append($canvasHead);
-        $canvasTurn.append($canvasBody);
-        $('#cc-log', $rightPane).append($canvasTurn);
 
         $mainRow.append($rightPane);
 

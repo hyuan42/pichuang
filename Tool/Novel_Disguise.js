@@ -1594,13 +1594,6 @@
         return pool[Math.floor(Math.random() * pool.length)].replace(/\{f\}/g, hunk.fileName);
     }
 
-    function _diffPlan(frequency) {
-        if (Math.random() > frequency) return 0;
-        const r = Math.random();
-        if (r < 0.12) return Math.floor(Math.random() * 2) + 2;
-        return 1;
-    }
-
     // ---- 左侧假代码编辑器 ----
     function _fakeLeftEditorCode() {
         var r = Math.random;
@@ -1784,7 +1777,80 @@
     // IDE 模式: 正文行收集器 + diff 计数器
     let _ideNovelLines = [];
     let _ideBuilt = false;
-    let _ideParagraphCount = 0;
+    let _ideLineBuffer = [];       // 累积未成turn的行
+
+    const _IDE_KEYWORDS = ['return ', 'while ', 'try ', 'if ', 'const ', 'function '];
+    const _IDE_LINES_PER_TURN = 6;
+
+    function _pickKeyword() {
+        return _IDE_KEYWORDS[Math.floor(Math.random() * _IDE_KEYWORDS.length)];
+    }
+
+    let _ideLineCounter = 1; // 全局行号, 跨turn递增
+
+    // 把缓冲区里的行组成一个turn并输出
+    function _flushIdeLineBuffer() {
+        if (!_ideLineBuffer.length) return;
+        const $log = $('#cc-log');
+        if (!$log.length) { _ideLineBuffer = []; return; }
+
+        const kw = _pickKeyword();
+        const $turn = $('<div class="cc-turn"></div>');
+        const $head = $('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span></div>');
+        const $body = $('<div class="cc-turn-body cc-novel-block"></div>');
+
+        // 随机选3行做颜色装饰 (不超过总行数)
+        const total = _ideLineBuffer.length;
+        const colorCount = Math.min(3, total);
+        const colorIdx = new Set();
+        while (colorIdx.size < colorCount) colorIdx.add(Math.floor(Math.random() * total));
+
+        // 代码风格颜色: 橙、洋红、青蓝、浅黄
+        const COLORS = ['#ce9178', '#c586c0', '#4ec9b0', '#dcdcaa'];
+        const colorList = COLORS.slice().sort(function(){ return Math.random() - 0.5; });
+        let colorAssign = 0;
+
+        _ideLineBuffer.forEach(function (text, i) {
+            const $line = $('<div class="cc-novel-line"></div>');
+
+            // 行号
+            const $num = $('<span class="cc-novel-num"></span>').text(_ideLineCounter++);
+            // 关键字前缀
+            const $kw  = $('<span class="cc-novel-kw"></span>').text(kw);
+
+            if (colorIdx.has(i)) {
+                // 把文字分成3段: 首尾纯文本, 中间一段染色
+                const color = colorList[colorAssign++ % colorList.length];
+                const len = text.length;
+                const s = Math.floor(len * 0.25);
+                const e = Math.floor(len * 0.65);
+                const pre  = text.slice(0, s);
+                const mid  = text.slice(s, e);
+                const post = text.slice(e);
+                const $txt = $('<span class="cc-novel-text"></span>');
+                if (pre)  $txt.append($('<span></span>').text(pre));
+                if (mid)  $txt.append($('<span></span>').text(mid).css('color', color));
+                if (post) $txt.append($('<span></span>').text(post));
+                $line.append($num).append($kw).append($txt);
+            } else {
+                const $txt = $('<span class="cc-novel-text"></span>').text(text);
+                $line.append($num).append($kw).append($txt);
+            }
+            $body.append($line);
+        });
+
+        $turn.append($head).append($body);
+        $log.append($turn);
+        _ideLineBuffer = [];
+
+        // 每个文字turn后插入 1~2 个diff或snippet
+        const insertCount = 1 + Math.floor(Math.random() * 2);
+        for (let k = 0; k < insertCount; k++) {
+            if (Math.random() < 0.5) _appendChatDiffTurn($log);
+            else _appendChatCodeSnippetTurn($log);
+        }
+    }
+    let _ideParagraphCount = 0; // kept for compatibility
 
     function _applyIdeCanvasFilter(opacity) {
         const op = Math.max(0.1, Math.min(1, opacity || (config.ideCanvasOpacity || 1)));
@@ -1807,23 +1873,9 @@
 
     // 把一段正文渲染为 ● assistant 气泡, 并在后面按概率追加 diff 块
     function _appendChatNovelTurn(text) {
-        const $log = $('#cc-log');
-        if (!$log.length) return;
-
-        const $turn = $('<div class="cc-turn"></div>');
-        const $head = $('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span></div>');
-        const $body = $('<div class="cc-turn-body"></div>');
-        const $txt = $('<div class="cc-novel-text"></div>').text(text);
-        $body.append($txt);
-        $turn.append($head);
-        $turn.append($body);
-        $log.append($turn);
-
-        _ideParagraphCount++;
-
-        const n = _diffPlan(0.38);
-        for (let i = 0; i < n; i++) {
-            _appendChatDiffTurn($log);
+        _ideLineBuffer.push(text);
+        if (_ideLineBuffer.length >= _IDE_LINES_PER_TURN) {
+            _flushIdeLineBuffer();
         }
     }
 
@@ -1853,6 +1905,47 @@
         $diff.append($dHead);
         $diff.append($dBody);
         $body.append($diff);
+        $log.append($turn);
+    }
+
+    function _appendChatCodeSnippetTurn($log) {
+        const tokens = _fakeLeftEditorCode();
+        const fileNames = ['agent.ts', 'context.ts', 'tools.ts', 'utils.ts', 'handler.ts', 'parser.ts', 'index.ts', 'config.ts'];
+        function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+        const fileName = pick(fileNames);
+
+        const labels = ['read context', 'analyzed output', 'checked references', 'scanned dependencies', 'reviewed types'];
+        const $turn = $('<div class="cc-turn"></div>');
+        const $head = $('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span><span class="cc-label cc-muted"> ' + pick(labels) + ' · ' + fileName + '</span></div>');
+        const $body = $('<div class="cc-turn-body"></div>');
+        $turn.append($head);
+        $turn.append($body);
+
+        // code block styled like the left editor, 6–12 lines
+        const targetLines = 6 + Math.floor(Math.random() * 7);
+        const $code = $('<div class="cc-snippet-block"></div>');
+        let lineNum = 1;
+        let cur = '';
+        let rendered = 0;
+        const flush = function () {
+            if (rendered >= targetLines) return;
+            const $row = $('<div class="le-line"></div>');
+            $row.append($('<span class="le-num"></span>').text(lineNum));
+            $row.append($('<span></span>').html(cur || '&nbsp;'));
+            $code.append($row);
+            lineNum++;
+            cur = '';
+            rendered++;
+        };
+        tokens.forEach(function (tok) {
+            if (rendered >= targetLines) return;
+            if (tok.t === 'pl' && tok.c === '') { flush(); return; }
+            const escaped = tok.c.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            cur += '<span class="le-' + tok.t + '">' + escaped + '</span>';
+        });
+        if (cur && rendered < targetLines) flush();
+
+        $body.append($code);
         $log.append($turn);
     }
 
@@ -2030,7 +2123,11 @@
         .cc-label  { color: var(--cc-text2); margin-left: 8px; }
         .cc-muted  { color: var(--cc-text2); }
         .cc-turn-body { line-height: 1.85; }
-        .cc-novel-text { font-family: var(--cc-font-sans); white-space: pre-wrap; font-size: 13px; user-select: text; }
+        .cc-novel-block { font-family: var(--cc-font-mono); font-size: 13px; line-height: 1.7; user-select: text; }
+        .cc-novel-line { display: flex; align-items: baseline; white-space: pre-wrap; }
+        .cc-novel-num { min-width: 32px; text-align: right; margin-right: 16px; color: var(--cc-text3); font-size: 11.5px; user-select: none; flex-shrink: 0; }
+        .cc-novel-kw { color: #4fc1ff; margin-right: 4px; white-space: pre; }
+        .cc-novel-text { color: var(--cc-text); white-space: pre-wrap; }
         .cc-analysis-text { font-family: var(--cc-font-mono); font-size: 12px; color: var(--cc-text); margin-bottom: 6px; }
 
         /* Diff block */
@@ -2053,6 +2150,18 @@
         .cc-diff-del { background: var(--cc-diff-del-bg); }
         .cc-diff-del .cc-diff-code, .cc-diff-del .cc-diff-sign { color: var(--cc-diff-del-fg); }
         .cc-diff-ctx .cc-diff-code { color: var(--cc-text2); }
+
+        /* Inline code snippet turn */
+        .cc-snippet-block {
+            margin-top: 8px;
+            font-family: var(--cc-font-mono); font-size: 11.5px; line-height: 1.6; padding: 6px 0;
+        }
+        .cc-snippet-block .le-line {
+            display: flex; padding: 0 10px; white-space: pre;
+        }
+        .cc-snippet-block .le-num {
+            width: 28px; flex: 0 0 28px; color: var(--cc-text3); user-select: none; text-align: right; margin-right: 12px;
+        }
 
         /* Weread canvas turn */
         .cc-canvas-turn .cc-canvas-body {
@@ -2228,15 +2337,17 @@
         $layout.appendTo('body');
 
         _ideBuilt = true;
+        _ideLineCounter = 1;
+        _ideLineBuffer = [];
 
         // Flush any lines collected before layout was ready
         if (_ideNovelLines.length > 0) {
             const buffered = _ideNovelLines.slice();
             _ideNovelLines = [];
-            _ideParagraphCount = 0;
             buffered.forEach(function (text) {
                 _appendChatNovelTurn(text);
             });
+            _flushIdeLineBuffer(); // flush remainder < 6 lines
         }
     }
 
@@ -2724,31 +2835,107 @@
                     $log.append($turn);
                     $canvasHostEl = $scaleWrapper;
                 } else {
-                    // offsetY 是 CSS 像素, canvas.height 是物理像素
-                    // 统一换算到 CSS 像素做切割, drawImage 时再乘 dpr 取物理行
                     const dpr = window.devicePixelRatio || 1;
-                    // 每片高度: CSS像素, 对应约一屏内容
-                    const sliceHeightCSS = 300;
-                    const numSlices = Math.max(1, Math.ceil(effectiveCanvasHeight / sliceHeightCSS));
                     const filterVal = 'invert(1) hue-rotate(20deg) brightness(1.9) contrast(1.2)';
                     const opacityVal = config.ideCanvasOpacity || 1;
 
-                    for (let si = 0; si < numSlices; si++) {
-                        const sliceYcss = si * sliceHeightCSS;           // CSS px, top of slice
-                        const sliceHcss = Math.min(sliceHeightCSS, effectiveCanvasHeight - sliceYcss);
+                    // ── 像素扫描: 在每个自然切割点附近寻找最接近背景色的行 ──
+                    function findSmartCuts(srcList, totalHeightCSS) {
+                        const physH = Math.round(totalHeightCSS * dpr);
+                        const physW = srcList.length ? srcList[0].w : 1;
+                        if (physH < 10 || physW < 1) return [];
 
-                        // 输出 canvas 大小 = CSS 尺寸 * scale (用户缩放)
+                        const tmp = document.createElement('canvas');
+                        tmp.width  = physW;
+                        tmp.height = physH;
+                        const tctx = tmp.getContext('2d');
+                        srcList.forEach(function (src) {
+                            tctx.drawImage(src.el, 0, Math.round(src.offsetY * dpr));
+                        });
+
+                        let imgData;
+                        try { imgData = tctx.getImageData(0, 0, physW, physH).data; }
+                        catch (e) { return []; }
+
+                        // 每物理行计算灰度方差 —— 背景行方差≈0, 文字行方差高
+                        // 方差无关主题颜色, 深色/浅色背景均适用
+                        const step = Math.max(1, Math.floor(physW / 80));
+                        const rowVar = new Float32Array(physH);
+                        for (let y = 0; y < physH; y++) {
+                            let s1 = 0, s2 = 0, cnt = 0;
+                            for (let x = 0; x < physW; x += step) {
+                                const idx = (y * physW + x) * 4;
+                                const v = (imgData[idx] + imgData[idx+1] + imgData[idx+2]) / 3;
+                                s1 += v; s2 += v * v; cnt++;
+                            }
+                            const mean = s1 / cnt;
+                            rowVar[y] = s2 / cnt - mean * mean;
+                        }
+
+                        // 方差阈值: 排序后取15%分位的3倍 (背景行是低方差少数派)
+                        const sortedVar = Array.prototype.slice.call(rowVar).sort(function(a,b){return a-b;});
+                        const VAR_THRESH = Math.max(8, sortedVar[Math.floor(physH * 0.15)] * 3);
+
+                        // 找连续低方差区域 (行间空白带), 取每段中心
+                        const MIN_GAP = Math.max(1, Math.round(dpr));
+                        const gapCenters = []; // CSS px
+                        let gs = -1;
+                        for (let y = 0; y <= physH; y++) {
+                            const isGap = y < physH && rowVar[y] < VAR_THRESH;
+                            if (isGap) { if (gs < 0) gs = y; }
+                            else {
+                                if (gs >= 0 && (y - gs) >= MIN_GAP) {
+                                    gapCenters.push(Math.round((gs + y - 1) / 2 / dpr));
+                                }
+                                gs = -1;
+                            }
+                        }
+
+                        // 按最小切片高度分组: 至少 MIN_SLICE_H CSS px 才切一刀
+                        const MIN_SLICE_H = 300;
+                        const cuts = [];
+                        let lastCut = 0;
+                        for (let i = 0; i < gapCenters.length; i++) {
+                            if (gapCenters[i] - lastCut >= MIN_SLICE_H) {
+                                cuts.push(gapCenters[i]);
+                                lastCut = gapCenters[i];
+                            }
+                        }
+                        return cuts;
+                    }
+
+                    const cuts = findSmartCuts(sourceCanvases, effectiveCanvasHeight);
+
+                    // 由切割点生成切片边界
+                    const sliceBounds = [];
+                    const bounds = [0].concat(cuts).concat([effectiveCanvasHeight]);
+                    for (let i = 0; i < bounds.length - 1; i++) {
+                        if (bounds[i + 1] > bounds[i] + 10) {
+                            sliceBounds.push({ top: bounds[i], bot: bounds[i + 1] });
+                        }
+                    }
+                    // 兜底: 全部失败退化为固定高度
+                    if (sliceBounds.length <= 1) {
+                        sliceBounds.length = 0;
+                        const fallbackH = 300;
+                        for (let y = 0; y < effectiveCanvasHeight; y += fallbackH) {
+                            sliceBounds.push({ top: y, bot: Math.min(y + fallbackH, effectiveCanvasHeight) });
+                        }
+                    }
+
+                    const numSlices = sliceBounds.length;
+                    for (let si = 0; si < numSlices; si++) {
+                        const sliceYcss = sliceBounds[si].top;
+                        const sliceHcss = sliceBounds[si].bot - sliceBounds[si].top;
+
                         const outCanvas = document.createElement('canvas');
                         outCanvas.width  = Math.ceil(origWidth * scale);
                         outCanvas.height = Math.ceil(sliceHcss * scale);
-                        // CSS display size matches output pixels (no extra scaling)
                         outCanvas.style.width  = Math.ceil(origWidth * scale) + 'px';
                         outCanvas.style.height = Math.ceil(sliceHcss * scale) + 'px';
                         const ctx2d = outCanvas.getContext('2d');
 
                         sourceCanvases.forEach(function (src) {
-                            // src.offsetY is CSS px from container top
-                            // src.h / src.w are physical pixels
                             const srcTopCSS = src.offsetY;
                             const srcHcss   = src.h / dpr;
                             const srcBotCSS = srcTopCSS + srcHcss;
@@ -2757,23 +2944,33 @@
                             const clipBotCSS = Math.min(sliceYcss + sliceHcss, srcBotCSS);
                             if (clipBotCSS <= clipTopCSS) return;
 
-                            // Convert clip bounds back to physical pixels for drawImage source
-                            const srcPhysRow  = Math.round((clipTopCSS - srcTopCSS) * dpr);
-                            const drawPhysH   = Math.round((clipBotCSS - clipTopCSS) * dpr);
-                            const srcPhysW    = src.w;
+                            const srcPhysRow = Math.round((clipTopCSS - srcTopCSS) * dpr);
+                            const drawPhysH  = Math.round((clipBotCSS - clipTopCSS) * dpr);
+                            const srcPhysW   = src.w;
 
-                            // Destination in output canvas pixels
-                            const dstY  = Math.round((clipTopCSS - sliceYcss) * scale);
-                            const dstH  = Math.round((clipBotCSS - clipTopCSS) * scale);
-                            const dstW  = Math.ceil(origWidth * scale);
+                            const dstY = Math.round((clipTopCSS - sliceYcss) * scale);
+                            const dstH = Math.round((clipBotCSS - clipTopCSS) * scale);
+                            const dstW = Math.ceil(origWidth * scale);
 
                             ctx2d.drawImage(src.el,
-                                0, srcPhysRow, srcPhysW, drawPhysH,  // source (physical px)
-                                0, dstY,       dstW,     dstH         // dest (output canvas px)
+                                0, srcPhysRow, srcPhysW, drawPhysH,
+                                0, dstY,       dstW,     dstH
                             );
                         });
 
-                        // 包装成 cc-turn
+                        // 跳过全空白切片 (所有像素方差极低且均值接近单一颜色)
+                        const checkCtx = outCanvas.getContext('2d');
+                        const checkData = checkCtx.getImageData(0, 0, outCanvas.width, outCanvas.height).data;
+                        let allBlank = true;
+                        const sampleStep = Math.max(1, Math.floor(outCanvas.width / 20));
+                        const refR = checkData[0], refG = checkData[1], refB = checkData[2];
+                        for (let pi = 0; pi < checkData.length; pi += sampleStep * 4) {
+                            if (Math.abs(checkData[pi] - refR) > 8 || Math.abs(checkData[pi+1] - refG) > 8 || Math.abs(checkData[pi+2] - refB) > 8) {
+                                allBlank = false; break;
+                            }
+                        }
+                        if (allBlank) continue;
+
                         const $turn = $('<div class="cc-turn cc-canvas-turn"></div>');
                         $turn.append($('<div class="cc-turn-head"><span class="cc-prefix cc-assistant-prefix">● assistant</span><span class="cc-label cc-muted"> rendered page (' + (si + 1) + '/' + numSlices + ')</span></div>'));
                         const $body = $('<div class="cc-canvas-body"></div>');
@@ -2781,11 +2978,39 @@
                         $body.append(outCanvas);
                         $turn.append($body);
                         $log.append($turn);
-
-                        // 每片后按概率插入 diff 块
-                        const n = _diffPlan(0.55);
-                        for (let di = 0; di < n; di++) { _appendChatDiffTurn($log); }
                     }
+
+                    // 保证每隔 1~2 片插入 1~2 个 diff/snippet 块
+                    (function () {
+                        const $turns = $log.find('.cc-canvas-turn');
+                        function rnd(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+                        function insertInterleave($after) {
+                            const count = rnd(1, 2);
+                            for (let k = 0; k < count; k++) {
+                                const useDiff = Math.random() < 0.5;
+                                // build turn detached, then insert after $after
+                                const $marker = $('<span style="display:none"></span>');
+                                $after.after($marker);
+                                if (useDiff) {
+                                    _appendChatDiffTurn($log);
+                                } else {
+                                    _appendChatCodeSnippetTurn($log);
+                                }
+                                // move the newly appended turn to after $marker
+                                const $newTurn = $log.children().last();
+                                $marker.after($newTurn);
+                                $marker.remove();
+                                $after = $newTurn;
+                            }
+                        }
+                        let gap = rnd(1, 2);
+                        $turns.each(function (i) {
+                            if (i > 0 && i % gap === 0) {
+                                insertInterleave($(this));
+                                gap = rnd(1, 2);
+                            }
+                        });
+                    })();
                     $canvasHostEl = $container; // 原始容器保留在 DOM 外(已 detach), 仅用于 observer
                     $log.scrollTop(0);
                 }

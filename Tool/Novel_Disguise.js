@@ -2415,6 +2415,7 @@
                     lines = $el.html().split('<br>').map(function (l) { return $(l).text ? $(l).text() : l; });
                 }
                 _pushIdeLines(lines);
+                _flushIdeLineBuffer();
             } else {
                 setExcelContent($el, type, clone);
             }
@@ -2461,6 +2462,7 @@
                     const lines = $(".chapter-wrapper section:not(#r-recommends) > div:not(.download)").toArray()
                         .map(function (el) { return $(el).text().trim(); }).filter(Boolean);
                     _pushIdeLines(lines);
+                    _flushIdeLineBuffer();
                 } else {
                     setExcelLines($(".chapter-wrapper section:not(#r-recommends) > div:not(.download)").toArray());
                 }
@@ -2562,6 +2564,7 @@
             const lines = $(".muye-reader-content>div>p").toArray()
                 .map(function (p) { return $(p).text().trim(); }).filter(Boolean);
             _pushIdeLines(lines);
+            _flushIdeLineBuffer();
         } else {
             setExcelLines($(".muye-reader-content>div>p").toArray());
             setExcelLines([$(".muye-reader-btns")], true);
@@ -2764,6 +2767,7 @@
             if (cur.length) lines.push(cur.map(function (c) { return c.text; }).join(''));
             if (isCode) {
                 _pushIdeLines(lines);
+                _flushIdeLineBuffer(); // 刷出不足 _IDE_LINES_PER_TURN 的尾部行
                 printLog('已追加 ' + lines.length + ' 行缓存文字到 IDE 编辑器');
             } else {
                 setExcelLines(lines, true);

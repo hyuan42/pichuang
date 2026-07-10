@@ -2,7 +2,7 @@
 // @name         小说页面伪装
 // @namespace    https://github.com/NiaoBlush/novel-disguise
 // @version      2.12.0-mini
-// @description  基于NiaoBlush的novel-disguise脚本(MIT)精简改造.仅适配起点/番茄/微信读书，支持excel模式伪装、代码模式伪装。
+// @description  基于NiaoBlush的novel-disguise脚本(MIT)精简改造.仅适配起点/番茄/微信读书，支持excel模式伪装、代码模式伪装。E键-退出伪装、R键-老板键、T键-切换伪装模式。
 // @author       NiaoBlush (modified)
 // @license      MIT
 // @run-at       document-end
@@ -3347,6 +3347,20 @@
                 applyMode(DICT.MODE.ORIGINAL);
             }
         }
+    });
+
+    // T 键切换伪装模式 (Excel <-> 代码)
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== 't' || event.ctrlKey || event.altKey || event.metaKey) return;
+        const tag = (event.target && event.target.tagName) || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target && event.target.isContentEditable)) return;
+        if (config.mode === DICT.MODE.ORIGINAL) return;
+
+        config.disguiseMode = config.disguiseMode === DICT.DISGUISE_MODE.CODE
+            ? DICT.DISGUISE_MODE.EXCEL
+            : DICT.DISGUISE_MODE.CODE;
+        writeConfig();
+        location.reload();
     });
 
     // 老板键 R: 切换正文列 (A列) 的可见性, 起点/番茄/微信读书通用
